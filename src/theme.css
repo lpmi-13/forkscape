@@ -99,7 +99,7 @@ button:focus-visible,input:focus-visible,label:focus-within{outline-color:#ffe07
 .flat-frame strong{color:#b9ffc4}
 .flat-frame small,.flat-note{color:#e2e4d8}
 @media(max-width:760px){.topbar::after{display:none}.brand{font-size:15px}.brand-mark{width:28px;height:28px;font-size:18px}.scene-footer{font-size:7px}.inspector{border-left:0}}
-@media(prefers-reduced-motion:reduce){button{transition:none}}
+@media(prefers-reduced-motion:reduce){button{transition:none}button:hover:not(:disabled){transform:none}.toolbar-dot{box-shadow:none}}
 
 .lesson-stage{margin-top:18px;padding-top:13px;border-top:1px dashed #806b94}
 .lesson-stage p,.model-tools{color:#e5dfe8;font-size:12px;line-height:1.5}
@@ -126,3 +126,23 @@ button:focus-visible,input:focus-visible,label:focus-within{outline-color:#ffe07
 .event-tick{flex:1 1 68px;min-width:60px}
 @media(min-width:1151px){.workspace{grid-template-rows:minmax(500px,calc(100vh - 370px)) minmax(106px,auto) minmax(215px,auto)}}
 @media(max-width:760px){.camera-controls{width:100%;justify-content:center}.scene-toolbar{justify-content:center}.scene-column{height:460px;min-height:460px}}
+
+.exercise{padding:13px;border:1px solid #77698d;border-radius:6px;background:#2a2b4d}
+.exercise-lock{color:#c7c0d6;font-size:12px}
+.exercise-note{font-size:11px;color:#c7c7dc!important}
+.exercise-feedback{padding:8px 10px;background:#1a424b;border-left:3px solid #86dfbd;color:#f0eedc!important}
+.sort-list{display:grid;gap:7px;margin:10px 0}
+.sort-list label{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px;font-size:12px}
+.sort-list select{min-width:105px;border:1px solid #91bbba;border-radius:4px;background:#253a59;color:#fff2db;padding:6px}
+.trace-table{width:100%;border-collapse:collapse;font-size:11px;text-align:center}
+.trace-table th,.trace-table td{border:1px solid #786a91;padding:7px 3px}
+.trace-table th:first-child{text-align:left}
+.range-label{display:block;margin:12px 0;font-size:12px}
+.range-label strong{display:block;color:#ffe095;margin:4px 0}
+.range-label input{width:100%;accent-color:#ffc675}
+.structure-list{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+.structure-list button{padding:5px 7px;border:1px solid #91bbba;border-radius:4px;background:#263c5b;color:#e9f8dc;font-size:10px}
+.structure-list button:hover{background:#417276}
+.code-line{display:block;white-space:pre-wrap;padding:1px 4px}
+.code-line.code-active{background:#675078;color:#fff5c9;outline:1px solid #dda5b1}
+.code-caption{display:block;margin-top:12px;color:#bdf3d6;font-size:10px}

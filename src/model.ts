@@ -227,13 +227,25 @@ export function memoryRows(world: WorldState) {
 }
 export function assertInvariants(world: WorldState) {
   const ids = new Set<number>();
+  const processIds = new Set<number>();
+  const objectIds = new Set<string>();
+  for (const object of world.kernelObjects) {
+    if (objectIds.has(object.id)) throw Error(`Duplicate kernel object ${object.id}`);
+    objectIds.add(object.id);
+  }
   for (const frame of world.frames) {
     if (ids.has(frame.id)) throw Error(`Duplicate frame ${frame.id}`);
     ids.add(frame.id);
     if (sharers(world, frame.id) < 1) throw Error(`Unreferenced frame ${frame.id}`);
   }
   for (const process of world.processes) {
-    if (process.status === 'zombie' && (process.pages.length || process.descriptors.length || process.threadIds.length)) throw Error(`Zombie ${process.pid} holds resources`);
+    if (processIds.has(process.pid)) throw Error(`Duplicate PID ${process.pid}`);
+    processIds.add(process.pid);
+    if (process.status === 'zombie' && (process.pages.length || process.regions.length || process.descriptors.length || process.threadIds.length || process.locks.length)) throw Error(`Zombie ${process.pid} holds resources`);
+    if (process.status === 'running' && !process.threadIds.length) throw Error(`Running PID ${process.pid} has no thread`);
+    if (new Set(process.threadIds).size !== process.threadIds.length) throw Error(`PID ${process.pid} has duplicate threads`);
+    if (new Set(process.descriptors.map(fd => fd.fd)).size !== process.descriptors.length) throw Error(`PID ${process.pid} has duplicate descriptors`);
+    if (new Set(process.locks.map(lock => lock.id)).size !== process.locks.length) throw Error(`PID ${process.pid} has duplicate locks`);
     for (const [page, id] of process.pages.entries()) {
       if (id === null) continue;
       if (!ids.has(id)) throw Error(`PID ${process.pid} maps missing frame ${id}`);

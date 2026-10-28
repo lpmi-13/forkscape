@@ -4,7 +4,8 @@ import type { WorldState } from './model';
 import { sharers } from './model';
 
 const palette = [0x64debc, 0xb193fa, 0xff91a6, 0x93dfff];
-export type SceneSelection = { kind: 'process'; pid: number } | { kind: 'page'; pid: number; page: number } | { kind: 'frame'; frameId: number } | { kind: 'object'; objectId: string };
+export type StructurePart = 'cable' | 'page_table' | 'thread' | 'stack';
+export type SceneSelection = { kind: 'process'; pid: number } | { kind: 'page'; pid: number; page: number } | { kind: 'frame'; frameId: number } | { kind: 'object'; objectId: string } | { kind: 'structure'; pid: number; part: StructurePart; index: number };
 
 export class ForkScene {
   private renderer: THREE.WebGLRenderer;
@@ -15,7 +16,9 @@ export class ForkScene {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private pickables: THREE.Object3D[] = [];
-  private frame = 0;
+  private resizeObserver: ResizeObserver;
+  private pendingFrame = 0;
+  private motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
   private labels: HTMLDivElement[] = [];
   private targets: { element: HTMLDivElement; point: THREE.Vector3 }[] = [];
   private currentWorld?: WorldState;
@@ -24,6 +27,7 @@ export class ForkScene {
   private selectedPage: { pid: number; page: number } | null = null;
   private selectedFrame: number | null = null;
   private selectedObjectId: string | null = null;
+  private selectedStructure: { pid: number; part: StructurePart; index: number } | null = null;
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -83,7 +87,9 @@ export class ForkScene {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(0, 1.2, 0);
     this.controls.enableDamping = true;
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) this.controls.enableDamping = false;
+    this.controls.enableDamping = !this.motionPreference.matches;
+    this.motionPreference.addEventListener('change', this.updateMotion);
+    this.controls.addEventListener('change', this.renderFrame);
     this.controls.minDistance = 8;
     this.controls.maxDistance = 25;
     this.controls.maxPolarAngle = Math.PI / 2.05;
@@ -96,21 +102,24 @@ export class ForkScene {
     neon.position.set(-5, 4, 2);
     this.scene.add(neon);
     this.scene.add(this.dynamic);
+    this.raycaster.params.Line.threshold = .12;
     this.renderer.domElement.addEventListener('click', this.click);
-    new ResizeObserver(this.resize).observe(host);
+    this.resizeObserver = new ResizeObserver(this.resize);
+    this.resizeObserver.observe(host);
     this.resize();
-    this.animate();
   }
 
-  setWorld(world: WorldState, selectedPid: number, selectedPage: { pid: number; page: number } | null, selectedFrame: number | null, selectedObjectId: string | null, onSelect: (selection: SceneSelection) => void) {
+  setWorld(world: WorldState, selectedPid: number, selectedPage: { pid: number; page: number } | null, selectedFrame: number | null, selectedObjectId: string | null, selectedStructure: { pid: number; part: StructurePart; index: number } | null, onSelect: (selection: SceneSelection) => void) {
     this.currentWorld = world;
     this.selectedPid = selectedPid;
     this.selectedPage = selectedPage;
     this.selectedFrame = selectedFrame;
     this.selectedObjectId = selectedObjectId;
+    this.selectedStructure = selectedStructure;
     this.onSelect = onSelect;
     this.clear();
     this.build();
+    this.renderFrame();
   }
 
   setCameraPreset(preset: 'overview' | 'process' | 'memory') {
@@ -132,6 +141,12 @@ export class ForkScene {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.renderFrame();
+  };
+
+  private updateMotion = () => {
+    this.controls.enableDamping = !this.motionPreference.matches;
+    this.controls.update();
   };
 
   private makeBox(width: number, height: number, depth: number, color: number, opacity = 1) {
@@ -144,6 +159,7 @@ export class ForkScene {
     const geometry = new THREE.BufferGeometry().setFromPoints([a, b]);
     const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
     this.dynamic.add(line);
+    return line;
   }
 
   private label(text: string, point: THREE.Vector3, className = '') {
@@ -233,22 +249,35 @@ export class ForkScene {
       this.dynamic.add(border);
       this.label(`${process.role.toUpperCase()} · PID ${process.pid}${process.status === 'zombie' ? ' · ZOMBIE' : ''}`, new THREE.Vector3(x, y + .3, z), isSelected ? 'label-selected' : '');
       if (process.status === 'zombie') return;
-      const pageTable = this.makeBox(5.1, .025, 1.9, 0xa686d8, .3);
+      const pageTableSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'page_table';
+      const pageTable = this.makeBox(5.8, .025, 2.35, pageTableSelected ? 0xffd779 : 0xa686d8, pageTableSelected ? .75 : .3);
       pageTable.position.set(x, y - .15, z);
+      pageTable.userData.selection = { kind: 'structure', pid: process.pid, part: 'page_table', index: 0 } satisfies SceneSelection;
+      this.pickables.push(pageTable);
       process.descriptors.forEach((descriptor, index) => {
         const point = objectPositions.get(descriptor.objectId);
-        if (point) this.addLine(new THREE.Vector3(x - 2.35 + index * .2, y, z - .7), point, 0xffd38d, .7);
+        if (point) {
+          const cableSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'cable' && this.selectedStructure.index === index;
+          const cable = this.addLine(new THREE.Vector3(x - 2.35 + index * .2, y, z - .7), point, cableSelected ? 0xffffff : 0xffd38d, cableSelected ? 1 : .7);
+          cable.userData.selection = { kind: 'structure', pid: process.pid, part: 'cable', index } satisfies SceneSelection;
+          this.pickables.push(cable);
+        }
       });
       process.threadIds.forEach((tid, index) => {
         if (index > 3) return;
-        const spindle = new THREE.Mesh(new THREE.CylinderGeometry(.045, .065, .38, 6), new THREE.MeshStandardMaterial({ color: 0xffe18c, emissive: 0xa46b2f, emissiveIntensity: .2 }));
+        const threadSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'thread' && this.selectedStructure.index === index;
+        const spindle = new THREE.Mesh(new THREE.CylinderGeometry(threadSelected ? .08 : .045, .065, .38, 6), new THREE.MeshStandardMaterial({ color: threadSelected ? 0xffffff : 0xffe18c, emissive: 0xa46b2f, emissiveIntensity: threadSelected ? .65 : .2 }));
         spindle.position.set(x + 2.42 - index * .18, y + .29, z + .6);
+        spindle.userData.selection = { kind: 'structure', pid: process.pid, part: 'thread', index } satisfies SceneSelection;
         this.dynamic.add(spindle);
+        this.pickables.push(spindle);
       });
       if (world.processes.length > 1) {
         for (let layer = 0; layer < 3; layer++) {
-          const stack = this.makeBox(.38, .12, .3, layer === 2 ? 0xffdc89 : 0x89c7dc);
+          const stack = this.makeBox(.38, .12, .3, this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'stack' ? 0xffffff : layer === 2 ? 0xffdc89 : 0x89c7dc);
           stack.position.set(x + 2.36, y + .22 + layer * .14, z - .55);
+          stack.userData.selection = { kind: 'structure', pid: process.pid, part: 'stack', index: 0 } satisfies SceneSelection;
+          this.pickables.push(stack);
         }
         this.label(process.role === 'master' ? `fork() → ${world.processes.find(p => p.parentPid === process.pid)?.pid ?? 'PID'}` : 'fork() → 0',
           new THREE.Vector3(x + 2.35, y + .78, z - .55), 'scene-label-small');
@@ -282,9 +311,7 @@ export class ForkScene {
     if (hit?.object.userData.selection) this.onSelect?.(hit.object.userData.selection as SceneSelection);
   };
 
-  private animate = () => {
-    this.frame = requestAnimationFrame(this.animate);
-    this.controls.update();
+  private renderFrame = () => {
     for (const { element, point } of this.targets) {
       const p = point.clone().project(this.camera);
       element.style.left = `${(p.x * .5 + .5) * this.host.clientWidth}px`;
@@ -292,6 +319,9 @@ export class ForkScene {
       element.style.display = p.z > 1 ? 'none' : '';
     }
     this.renderer.render(this.scene, this.camera);
+    if (this.controls.enableDamping && !this.pendingFrame) {
+      this.pendingFrame = requestAnimationFrame(() => { this.pendingFrame = 0; this.controls.update(); });
+    }
   };
 
   private clear() {
@@ -309,7 +339,10 @@ export class ForkScene {
   }
 
   dispose() {
-    cancelAnimationFrame(this.frame);
+    cancelAnimationFrame(this.pendingFrame);
+    this.resizeObserver.disconnect();
+    this.motionPreference.removeEventListener('change', this.updateMotion);
+    this.controls.removeEventListener('change', this.renderFrame);
     this.clear();
     this.controls.dispose();
     this.renderer.domElement.removeEventListener('click', this.click);

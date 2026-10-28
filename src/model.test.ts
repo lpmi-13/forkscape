@@ -116,3 +116,39 @@ test('deterministic action walks preserve accounting and prior snapshots', () =>
     }
   }
 });
+
+test('descriptor offsets and surviving threads hold across varied fork shapes', () => {
+  for (let count = 1; count <= 6; count++) {
+    let world = initialWorld();
+    for (let index = 0; index < count; index++) {
+      world = applyAction(world, { type: 'open_file', pid: 4100, name: `file-${index}` });
+      world = applyAction(world, { type: 'spawn_thread', pid: 4100 });
+    }
+    const parent = world.processes[0];
+    const callerTid = parent.threadIds[count];
+    world = applyAction(world, { type: 'lock', pid: 4100, lockId: 'held', tid: parent.threadIds[1] });
+    world = applyAction(world, { type: 'fork', parentPid: 4100, callerTid });
+    const child = world.processes[1];
+    assert.deepEqual(child.threadIds, [child.pid]);
+    assert.deepEqual(child.descriptors, world.processes[0].descriptors);
+    assert.notStrictEqual(child.descriptors[0], world.processes[0].descriptors[0]);
+    assert.equal(child.locks[0].ownerTid, parent.threadIds[1]);
+    for (const fd of child.descriptors.filter(item => item.fd > 3)) {
+      world = applyAction(world, { type: 'read_file', pid: child.pid, fd: fd.fd, bytes: fd.fd });
+      const parentFd = world.processes[0].descriptors.find(item => item.fd === fd.fd)!;
+      assert.equal(world.kernelObjects.find(object => object.id === parentFd.objectId)?.offset, fd.fd);
+      world = applyAction(world, { type: 'close_fd', pid: child.pid, fd: fd.fd });
+      assert.equal(objectRefCount(world, parentFd.objectId), 1);
+      assertInvariants(world);
+    }
+  }
+});
+
+test('invariant checks reject duplicate descriptors and threads', () => {
+  const duplicateFd = initialWorld();
+  duplicateFd.processes[0].descriptors.push({ ...duplicateFd.processes[0].descriptors[0] });
+  assert.throws(() => assertInvariants(duplicateFd), /duplicate descriptors/);
+  const duplicateTid = initialWorld();
+  duplicateTid.processes[0].threadIds.push(duplicateTid.processes[0].threadIds[0]);
+  assert.throws(() => assertInvariants(duplicateTid), /duplicate threads/);
+});

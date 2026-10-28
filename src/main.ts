@@ -1,7 +1,8 @@
 import './style.css';
 import './theme.css';
 import { applyAction, assertInvariants, chargedBytes, guidedHistory, initialWorld, memoryRows, pageTableBytes, physicalBytes, regionForPage, sharers, objectRefCount, type Action, type WorldState } from './model';
-import type { ForkScene } from './scene';
+import { classificationComplete, classificationItems, emptyExerciseProgress, forkPageTableKiB, moduleComplete, traceComplete, type ExerciseProgress, type Owner } from './exercises';
+import type { ForkScene, SceneSelection, StructurePart } from './scene';
 
 type ModuleId = 1 | 2 | 3 | 4;
 const lessons: Record<ModuleId, { title: string; kicker: string; body: string; question: string; choices: string[]; correct: number; answer: string; onCall: string; evidence: string; focus: number }> = {
@@ -15,13 +16,17 @@ const history: WorldState[] = [initialWorld()];
 const root = document.querySelector<HTMLDivElement>('#app')!;
 const saved = (() => { try { return JSON.parse(localStorage.getItem('forkscape-progress') || '{}') as Record<number, number>; } catch { return {}; } })();
 let answers: Record<number, number> = saved;
+const storedExercise = (() => { try { return JSON.parse(localStorage.getItem('forkscape-exercises') || '{}') as Partial<ExerciseProgress>; } catch { return {}; } })();
+let exercise: ExerciseProgress = { ...emptyExerciseProgress(), ...storedExercise, classification: storedExercise.classification ?? {}, trace: storedExercise.trace ?? {} };
 const observedModules: Record<number, boolean> = {};
 let moduleId: ModuleId = 1;
 let step = 0;
+let walkStep = -1;
 let selectedPid = 4100;
 let selectedFrame: number | null = null;
 let selectedObjectId: string | null = null;
 let selectedPage: { pid: number; page: number } | null = null;
+let selectedStructure: { pid: number; part: StructurePart; index: number } | null = null;
 let actionError = '';
 let flat = localStorage.getItem('forkscape-flat') === 'true';
 let scene: ForkScene | null = null;
@@ -30,6 +35,17 @@ let sceneLoading = false;
 const escapeHtml = (value: string | number) => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 const kb = (bytes: number) => `${Number.isInteger(bytes / 1024) ? bytes / 1024 : (bytes / 1024).toFixed(1)} KiB`;
 const world = () => history[step];
+const saveExercise = () => localStorage.setItem('forkscape-exercises', JSON.stringify(exercise));
+const forkGuesses = [0, 4, 8, 16, 32, 64, 128, 256, 404, 512, 1024, 2048, 4096, 8192, 32768, 204800];
+const copyGuesses = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 65536, 209715200];
+const walkLabels = [
+  'Before fork(): only the master exists.',
+  'fork() returns in both processes. The parent receives the child PID; the child receives 0.',
+  'The parent follows the nonzero branch and prints the child PID.',
+  'The child follows the zero branch and prints its own message.',
+  'The child exits and remains as a zombie until its parent waits.',
+  'The parent calls waitpid(); the zombie is reaped.',
+];
 
 root.innerHTML = `
   <header class="topbar">
@@ -40,7 +56,7 @@ root.innerHTML = `
     <aside class="lesson-rail">
       <div class="rail-heading"><span>GUIDED LAB</span><span>01—04</span></div>
       <nav id="module-nav" aria-label="Modules"></nav>
-      <section id="lesson-content" aria-live="polite"></section>
+      <section id="lesson-content"></section>
     </aside>
     <section class="scene-column" aria-label="Process and memory visualization">
       <div class="scene-toolbar"><div><span class="toolbar-dot"></span> LIVE MODEL STATE <span class="toolbar-separator">/</span> <span id="scene-heading"></span></div><div class="camera-controls" aria-label="3D camera controls"><button type="button" data-camera="overview">Overview</button><button type="button" data-camera="process">Decks</button><button type="button" data-camera="memory">Frames</button><button type="button" data-zoom="in" aria-label="Zoom in">＋</button><button type="button" data-zoom="out" aria-label="Zoom out">−</button></div></div>
@@ -69,13 +85,34 @@ async function ensureScene() {
     const { ForkScene } = await import('./scene');
     if (flat) return;
     scene = new ForkScene(host);
-    scene.setWorld(world(), selectedPid, selectedPage, selectedFrame, selectedObjectId, selection => { selectVisual(selection); });
+    scene.setWorld(world(), selectedPid, selectedPage, selectedFrame, selectedObjectId, selectedStructure, selection => { selectVisual(selection); });
   } catch { flat = true; render(); }
   finally { sceneLoading = false; }
 }
 
 function renderNav() {
-  root.querySelector('#module-nav')!.innerHTML = ([1, 2, 3, 4] as ModuleId[]).map(id => `<button class="module-link ${moduleId === id ? 'active' : ''}" type="button" data-module="${id}"><span class="module-number">0${id}</span><span>${escapeHtml(lessons[id].title)}</span><span class="module-check">${answers[id] !== undefined ? '✓' : '↗'}</span></button>`).join('');
+  root.querySelector('#module-nav')!.innerHTML = ([1, 2, 3, 4] as ModuleId[]).map(id => { const complete = moduleComplete(id, answers[id] !== undefined, exercise); return `<button class="module-link ${moduleId === id ? 'active' : ''}" type="button" data-module="${id}" aria-current="${moduleId === id ? 'page' : 'false'}" aria-label="Module ${id}: ${escapeHtml(lessons[id].title)}, ${complete ? 'complete' : 'incomplete'}"><span class="module-number">0${id}</span><span>${escapeHtml(lessons[id].title)}</span><span class="module-check" aria-hidden="true">${complete ? '✓' : '↗'}</span></button>`; }).join('');
+}
+
+function renderExercise(): string {
+  if (answers[moduleId] === undefined) return '<p class="exercise-lock">Commit a prediction to unlock this exercise.</p>';
+  if (moduleId === 1) {
+    const correct = classificationComplete(exercise);
+    return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · SORT THE PARTS</div><p>Choose where each item belongs. A process owns references to kernel objects.</p><form id="classification-form"><div class="sort-list">${classificationItems.map(item => `<label><span>${escapeHtml(item.label)}</span><select name="${item.id}" aria-label="${escapeHtml(item.label)} belongs to"><option value="">Choose…</option><option value="process" ${exercise.classification[item.id] === 'process' ? 'selected' : ''}>Process</option><option value="kernel" ${exercise.classification[item.id] === 'kernel' ? 'selected' : ''}>Kernel</option></select></label>`).join('')}</div><button class="primary" type="submit">Check classification</button></form>${exercise.classificationChecked ? `<p class="exercise-feedback" role="status">${correct ? 'All six are placed correctly. Exercise complete.' : 'Some placements need another look. The descriptor table belongs to a process; the object it refers to lives in the kernel.'}</p>` : ''}</div>`;
+  }
+  if (moduleId === 2) {
+    return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · FOLLOW BOTH RETURNS</div><p>${walkStep < 0 ? 'Start at the fork line, then advance through each branch, child exit, and parent reap.' : escapeHtml(walkLabels[walkStep])}</p><p class="exercise-feedback" role="status">${exercise.forkWalkthroughDone ? 'Walkthrough complete.' : walkStep < 0 ? '0 of 6 code states visited.' : `${walkStep + 1} of 6 code states visited.`}</p><button type="button" class="event-button" id="walk-next" ${walkStep === 5 ? 'disabled' : ''}>${walkStep < 0 ? 'Start code walkthrough' : 'Next code step →'}</button><p class="exercise-note">Starting the walkthrough loads a fresh model run. The event timeline remains available for reviewing states.</p></div>`;
+  }
+  if (moduleId === 3) {
+    const trace = exercise.trace;
+    const value = (n?: number) => n === undefined ? '—' : `F${n}`;
+    return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · FOLLOW ONE ADDRESS</div><p>Fork the master. Select virtual page 2 in the parent and child before a write. Write page 2 in the child, then select page 2 in each process again. Use the flat view or scene tiles.</p><table class="trace-table"><thead><tr><th></th><th>Before write</th><th>After write</th></tr></thead><tbody><tr><th>Parent page 2</th><td>${value(trace.beforeParent)}</td><td>${value(trace.afterParent)}</td></tr><tr><th>Child page 2</th><td>${value(trace.beforeChild)}</td><td>${value(trace.afterChild)}</td></tr></tbody></table><p class="exercise-feedback" role="status">${traceComplete(trace) ? 'Same virtual page, different frame after the child writes. Exercise complete.' : 'Trace both mappings before and after the write to complete this exercise.'}</p></div>`;
+  }
+  const guess = exercise.sizeGuess;
+  const observed = exercise.copyObserved;
+  const forkIndex = Math.max(0, forkGuesses.indexOf(guess?.forkKiB ?? 204800));
+  const copyIndex = Math.max(0, copyGuesses.indexOf(guess?.copyBytes ?? 8));
+  return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · PREDICT THE SIZES</div><p>For a 200 MiB private mapping, estimate extra memory immediately after fork. Then estimate how much a first 8-byte write copies. Move both logarithmic sliders and commit.</p><form id="size-form"><label class="range-label">Fork overhead <strong id="fork-guess-label">${kb(forkGuesses[forkIndex] * 1024)}</strong><input name="fork-size" type="range" min="0" max="${forkGuesses.length - 1}" value="${forkIndex}" ${guess ? 'disabled' : ''}></label><label class="range-label">First write copies <strong id="copy-guess-label">${copyGuesses[copyIndex].toLocaleString()} bytes</strong><input name="copy-size" type="range" min="0" max="${copyGuesses.length - 1}" value="${copyIndex}" ${guess ? 'disabled' : ''}></label>${guess ? '' : '<button class="primary" type="submit">Commit size predictions</button>'}</form>${guess ? `<p class="exercise-feedback">You predicted ${kb(guess.forkKiB * 1024)} at fork and ${guess.copyBytes.toLocaleString()} bytes on write. This page-table model adds about ${kb(forkPageTableKiB(200) * 1024)} at fork for 200 MiB of mapped data. A first shared-page write copies ${world().pageSize.toLocaleString()} bytes.</p><p class="exercise-feedback" role="status">${observed ? 'Fork and copy-on-write observed. Exercise complete.' : 'Now fork and write page 2 in a child to observe the model outcome.'}</p>` : ''}</div>`;
 }
 
 function renderLesson() {
@@ -99,6 +136,7 @@ function renderLesson() {
   root.querySelector('#lesson-content')!.innerHTML = `
     <div class="lesson-kicker">${lesson.kicker}</div><h1>${escapeHtml(lesson.title)}</h1><p class="lesson-body">${escapeHtml(lesson.body)}</p>
     <div class="prediction"><div class="section-tag">PREDICT</div><p class="question">${escapeHtml(lesson.question)}</p><form id="prediction-form">${lesson.choices.map((choice, index) => `<label class="choice ${answered && answers[moduleId] === index ? 'chosen' : ''}"><input name="prediction" type="radio" value="${index}" ${answered && answers[moduleId] === index ? 'checked' : ''} ${answered ? 'disabled' : ''}/><span>${escapeHtml(choice)}</span></label>`).join('')}${answered ? '' : '<button class="primary" type="submit">Commit prediction →</button>'}</form>${answered && observedModules[moduleId] ? `<div class="answer ${answers[moduleId] === lesson.correct ? 'correct' : 'review'}"><strong>${answers[moduleId] === lesson.correct ? 'Correct prediction' : 'Compare your prediction'}</strong><p>${escapeHtml(lesson.answer)}</p></div>` : ''}</div>
+    ${renderExercise()}
     <div class="lesson-stage"><div class="section-tag">ACT</div><p>Choose a process or page, then change the model. Each action adds a state to the timeline.</p><div class="lab-actions">${actions}</div><button id="show-event" class="event-button" type="button" ${answered ? '' : 'disabled'}>Load guided example</button><button id="reset-model" class="subtle" type="button">Reset model</button><p id="action-error" class="action-error" role="alert">${escapeHtml(actionError)}</p></div>
     <details class="model-tools"><summary>More model controls</summary><div class="lab-actions">${button('Map anonymous page', 'map-anon', !!active)}${button('Map shared file', 'map-file', !!active)}${button('Unmap latest region', 'unmap', !!active && !!process?.regions.some(r => r.id.startsWith('region-')))}${button('Start thread', 'thread', !!active)}${button('Lock with newest thread', 'lock', !!active && (process?.threadIds.length ?? 0) > 1)}${button('Unlock', 'unlock', !!active && !!heldLock)}${button('Set limit to current use', 'limit')}${button('Remove limit', 'unlimit')}</div></details>
     <div class="lesson-stage"><div class="section-tag">OBSERVE</div><p>${escapeHtml(state.events.at(-1)!.description)}</p><p>Selected PID: ${selectedPid} · physical frames: ${state.frames.length} · counters: ${state.processes.map(p => `${p.pid}=${p.counter}`).join(', ')}</p></div>
@@ -108,7 +146,14 @@ function renderLesson() {
 }
 
 function renderFlat(state: WorldState) {
-  root.querySelector('#flat-host')!.innerHTML = `<div class="flat-title">PROCESS ADDRESS SPACES</div><div class="flat-processes">${state.processes.map(process => `<div class="flat-process ${selectedPid === process.pid && selectedPage === null ? 'selected' : ''}"><button type="button" data-pid="${process.pid}"><strong>${process.role.toUpperCase()} · PID ${process.pid}</strong><span>${process.status === 'zombie' ? 'ZOMBIE · mappings released' : `PPID ${process.parentPid ?? '—'} · ${process.pages.filter(id => id !== null).length} pages · ${process.threadIds.length} thread(s)`}</span></button><div class="page-strip">${process.pages.map((id, index) => id === null ? '' : `<button type="button" data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, frame ${id}" class="page-chip ${sharers(state, id) > 1 ? 'is-shared' : ''} ${selectedPage?.pid === process.pid && selectedPage.page === index ? 'selected' : ''}">${index}→F${id}<small>${escapeHtml(regionForPage(process, index)?.name ?? '')}</small></button>`).join('')}</div></div>`).join('')}</div><div class="flat-title">PHYSICAL FRAMES</div><div class="flat-frames">${state.frames.map(frame => `<button type="button" data-frame="${frame.id}" class="flat-frame ${selectedFrame === frame.id ? 'selected' : ''}"><strong>F${frame.id}</strong><span>${escapeHtml(frame.region)}</span><small>${sharers(state, frame.id)} ${sharers(state, frame.id) === 1 ? 'mapping' : 'mappings'}</small></button>`).join('')}</div><div class="flat-title">KERNEL OBJECTS</div><div class="flat-frames">${state.kernelObjects.map(object => `<button type="button" data-object="${escapeHtml(object.id)}" class="flat-frame ${selectedObjectId === object.id ? 'selected' : ''}"><strong>${escapeHtml(object.kind)}</strong><span>${escapeHtml(object.id)}</span><small>${objectRefCount(state, object.id)} descriptor(s)${object.kind === 'file' ? ` · offset ${object.offset}` : ''}</small></button>`).join('')}</div><p class="flat-note">Select a page to trace its mapping. Shared frames have multiple mappings; descriptors can refer to one kernel object.</p>`;
+  root.querySelector('#flat-host')!.innerHTML = `<div class="flat-title">PROCESS ADDRESS SPACES</div><div class="flat-processes">${state.processes.map(process => `<div class="flat-process ${selectedPid === process.pid && selectedPage === null && selectedStructure === null ? 'selected' : ''}"><button type="button" data-pid="${process.pid}"><strong>${process.role.toUpperCase()} · PID ${process.pid}</strong><span>${process.status === 'zombie' ? 'ZOMBIE · mappings released' : `PPID ${process.parentPid ?? '—'} · ${process.pages.filter(id => id !== null).length} pages · ${process.threadIds.length} thread(s)`}</span></button><div class="page-strip">${process.pages.map((id, index) => id === null ? '' : `<button type="button" data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, frame ${id}" class="page-chip ${sharers(state, id) > 1 ? 'is-shared' : ''} ${selectedPage?.pid === process.pid && selectedPage.page === index ? 'selected' : ''}">${index}→F${id}<small>${escapeHtml(regionForPage(process, index)?.name ?? '')}</small></button>`).join('')}</div>${process.status === 'running' ? `<div class="structure-list" aria-label="PID ${process.pid} scene parts">${structureButtons(state, process.pid)}</div>` : ''}</div>`).join('')}</div><div class="flat-title">PHYSICAL FRAMES</div><div class="flat-frames">${state.frames.map(frame => `<button type="button" data-frame="${frame.id}" class="flat-frame ${selectedFrame === frame.id ? 'selected' : ''}"><strong>F${frame.id}</strong><span>${escapeHtml(frame.region)}</span><small>${sharers(state, frame.id)} ${sharers(state, frame.id) === 1 ? 'mapping' : 'mappings'}</small></button>`).join('')}</div><div class="flat-title">KERNEL OBJECTS</div><div class="flat-frames">${state.kernelObjects.map(object => `<button type="button" data-object="${escapeHtml(object.id)}" class="flat-frame ${selectedObjectId === object.id ? 'selected' : ''}"><strong>${escapeHtml(object.kind)}</strong><span>${escapeHtml(object.id)}</span><small>${objectRefCount(state, object.id)} descriptor(s)${object.kind === 'file' ? ` · offset ${object.offset}` : ''}</small></button>`).join('')}</div><p class="flat-note">Select a page to trace its mapping. Shared frames have multiple mappings; descriptors can refer to one kernel object.</p>`;
+}
+
+function structureButtons(state: WorldState, pid: number): string {
+  const process = state.processes.find(item => item.pid === pid);
+  if (!process || process.status !== 'running') return '';
+  const button = (part: StructurePart, index: number, label: string) => `<button type="button" data-structure="${part}" data-structure-pid="${pid}" data-structure-index="${index}" aria-label="Inspect PID ${pid} ${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+  return button('page_table', 0, 'Page-table sheet') + process.descriptors.map((fd, index) => button('cable', index, `fd ${fd.fd} cable`)).join('') + process.threadIds.map((tid, index) => button('thread', index, `Thread ${tid} spindle`)).join('') + (state.processes.length > 1 ? button('stack', 0, 'Fork stack blocks') : '');
 }
 
 function renderInspector(state: WorldState) {
@@ -121,14 +166,23 @@ function renderInspector(state: WorldState) {
   const frameMappings = frame ? state.processes.flatMap(p => p.pages.flatMap((id, index) => id === frame.id ? [`PID ${p.pid} page ${index}`] : [])) : [];
   const object = selectedObjectId === null ? null : state.kernelObjects.find(item => item.id === selectedObjectId);
   const objectDescriptors = object ? state.processes.flatMap(p => p.descriptors.filter(fd => fd.objectId === object.id).map(fd => `PID ${p.pid} fd ${fd.fd}`)) : [];
-  const body = object
+  const structure = selectedStructure?.pid === process.pid ? selectedStructure : null;
+  const structureBody = structure ? (() => {
+    const fd = process.descriptors[structure.index], tid = process.threadIds[structure.index];
+    if (structure.part === 'cable' && fd) return `<h2>Descriptor cable</h2><p>PID ${process.pid} fd ${fd.fd} → ${escapeHtml(fd.objectId)}</p><div class="inspector-rung"><span>METAPHOR</span><p>A cable joins a process port to a kernel object.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>The descriptor table holds a reference. Fork copies the table entries, so both processes can refer to the same open object and file offset.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/fd/${fd.fd} · fdinfo/${fd.fd}</code><small>The cable and object ID are modeled.</small></div>`;
+    if (structure.part === 'thread' && tid !== undefined) return `<h2>Thread spindle</h2><p>PID ${process.pid} · TID ${tid}</p><div class="inspector-rung"><span>METAPHOR</span><p>One spindle marks one thread on this deck.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Only the thread that calls fork survives in the child. Other thread-held locks may stay held in the copied address space.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/task</code><small>Thread IDs and locks here are model data.</small></div>`;
+    if (structure.part === 'stack' && state.processes.length > 1) return `<h2>Fork stack blocks</h2><p>PID ${process.pid} · modeled call stack</p><div class="inspector-rung"><span>METAPHOR</span><p>Stacked blocks stand beside each deck after fork.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Both processes resume from the same fork() call. ${process.role === 'master' ? 'The parent receives the child PID.' : 'The child receives 0.'} Their stacks can diverge after returning.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>strace -f -e clone,fork,wait4 · /proc/${process.pid}/stack</code><small>The blocks are schematic; user stacks require a debugger or profiler.</small></div>`;
+    if (structure.part === 'page_table') return `<h2>Page-table sheet</h2><p>PID ${process.pid} · ${kb(state.pageSize * (1 + new Set(process.pages.flatMap((id, index) => id === null ? [] : [Math.floor(index / 512)])).size))} model charge</p><div class="inspector-rung"><span>METAPHOR</span><p>A thin sheet below the process deck routes virtual pages to frames.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Fork creates a separate page table for the child while initially keeping data frames shared. This model charges one root and one leaf per occupied group of 512 pages.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/status: VmPTE · /proc/${process.pid}/maps</code><small>Sheet thickness and charges are simplified model values.</small></div>`;
+    return '';
+  })() : '';
+  const body = structureBody || (object
     ? `<h2>${escapeHtml(object.kind)} <em>${escapeHtml(object.id)}</em></h2><p>${objectRefCount(state, object.id)} descriptor(s) point here</p><div class="inspector-rung"><span>METAPHOR</span><p>A buoy in the kernel layer with cables from process decks.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>${objectDescriptors.join(' · ')}. ${object.kind === 'file' ? `Shared file offset: ${object.offset} bytes.` : 'One listening socket is shared.'}</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/&lt;pid&gt;/fd · ss -lnp</code><small>Object identity and offset shown here are modeled.</small></div>`
     : frame
     ? `<h2>Frame F${frame.id}</h2><p>${escapeHtml(frame.region)} · ${frame.kind} · ${sharers(state, frame.id)} mapping(s)</p><div class="inspector-rung"><span>METAPHOR</span><p>A tile on the memory floor.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>${frameMappings.join(' · ')}. Model write revision: ${frame.revision}. ${frame.fileKey ? `File cache key: ${escapeHtml(frame.fileKey)}.` : 'Anonymous data frame.'}</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/&lt;pid&gt;/pagemap · /proc/kpagecount</code><small>Exact frame identity often needs privilege. This frame ID is modeled.</small></div>`
     : page !== null && pageFrame && region
       ? `<h2>Virtual page <em>${page}</em></h2><p>PID ${process.pid} → frame F${pageFrame.id}</p><div class="inspector-rung"><span>METAPHOR</span><p>A tile on PID ${process.pid}'s deck; its filament points to the floor.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>${escapeHtml(region.name)} · ${region.kind} · ${region.sharing} · ${region.writable ? 'writable' : 'read-only'}. ${sharers(state, pageFrame.id)} mapping(s) reach this frame. Model write revision: ${pageFrame.revision}.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/maps · smaps_rollup</code><small>Virtual page to exact frame requires privileged pagemap access. This mapping is modeled.</small></div><button type="button" data-frame="${pageFrame.id}" class="subtle">Inspect frame F${pageFrame.id}</button>`
-      : `<h2>${process.role === 'master' ? 'Master' : 'Worker'} <em>PID ${process.pid}</em></h2><p>${process.status === 'zombie' ? 'Exited · awaiting reaping' : `${process.pages.filter(id => id !== null).length} mapped pages · ${process.threadIds.length} thread(s)`}</p><div class="inspector-rung"><span>METAPHOR</span><p>A deck with page tiles and descriptor ports.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Address space: ${process.regions.map(r => `${escapeHtml(r.name)} (${r.pageCount}p)`).join(', ') || 'released'}. Page tables: ${kb(process.status === 'running' ? state.pageSize * (1 + new Set(process.pages.flatMap((id, index) => id === null ? [] : [Math.floor(index / 512)])).size) : 0)}.</p><p>Descriptors: ${process.descriptors.map(fd => { const object = state.kernelObjects.find(o => o.id === fd.objectId)!; return `fd ${fd.fd} → ${escapeHtml(object.id)} (${object.kind}, ${objectRefCount(state, object.id)} refs${object.kind === 'file' ? `, offset ${object.offset}` : ''})`; }).join('; ') || 'none'}.</p><p>Threads: ${process.threadIds.join(', ') || 'none'}. Locks: ${process.locks.map(lock => `${escapeHtml(lock.id)} → ${lock.ownerTid ?? 'free'}${lock.ownerTid !== null && !process.threadIds.includes(lock.ownerTid) ? ' (owner absent after fork)' : ''}`).join('; ') || 'none'}.</p><p>Counter: ${process.counter} in this process.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>ps · /proc/${process.pid}/maps · fd · task</code><small>All values shown here are model data.</small></div>`;
-  root.querySelector('#inspector')!.innerHTML = `<div class="panel-heading"><span>INSPECTOR</span><span>MODEL</span></div><div class="inspector-content">${body}<button id="clear-selection" type="button" class="subtle" ${object || frame || page !== null ? '' : 'hidden'}>← Process</button></div>`;
+      : `<h2>${process.role === 'master' ? 'Master' : 'Worker'} <em>PID ${process.pid}</em></h2><p>${process.status === 'zombie' ? 'Exited · awaiting reaping' : `${process.pages.filter(id => id !== null).length} mapped pages · ${process.threadIds.length} thread(s)`}</p><div class="inspector-rung"><span>METAPHOR</span><p>A deck with page tiles and descriptor ports.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Address space: ${process.regions.map(r => `${escapeHtml(r.name)} (${r.pageCount}p)`).join(', ') || 'released'}. Page tables: ${kb(process.status === 'running' ? state.pageSize * (1 + new Set(process.pages.flatMap((id, index) => id === null ? [] : [Math.floor(index / 512)])).size) : 0)}.</p><p>Descriptors: ${process.descriptors.map(fd => { const object = state.kernelObjects.find(o => o.id === fd.objectId)!; return `fd ${fd.fd} → ${escapeHtml(object.id)} (${object.kind}, ${objectRefCount(state, object.id)} refs${object.kind === 'file' ? `, offset ${object.offset}` : ''})`; }).join('; ') || 'none'}.</p><p>Threads: ${process.threadIds.join(', ') || 'none'}. Locks: ${process.locks.map(lock => `${escapeHtml(lock.id)} → ${lock.ownerTid ?? 'free'}${lock.ownerTid !== null && !process.threadIds.includes(lock.ownerTid) ? ' (owner absent after fork)' : ''}`).join('; ') || 'none'}.</p><p>Counter: ${process.counter} in this process.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>ps · /proc/${process.pid}/maps · fd · task</code><small>All values shown here are model data.</small></div><div class="structure-list" aria-label="Inspect scene parts">${structureButtons(state, process.pid)}</div>`);
+  root.querySelector('#inspector')!.innerHTML = `<div class="panel-heading"><span>INSPECTOR</span><span>MODEL</span></div><div class="inspector-content">${body}<button id="clear-selection" type="button" class="subtle" ${object || frame || page !== null || structure ? '' : 'hidden'}>← Process</button></div>`;
 }
 
 function renderLedger(state: WorldState) {
@@ -153,33 +207,62 @@ function renderTimeline(state: WorldState) {
 }
 
 function renderCode() {
-  root.querySelector('#code')!.textContent = moduleId === 2 ? `pid = os.fork()\nif pid == 0:\n    print('child: fork returned 0')\nelse:\n    print(f'parent: child is {pid}')` : moduleId === 4 ? `# Both processes begin with the same page mapping.\ncounter += 1  # 8-byte change, page-sized copy\n\n# Another process still sees its own value.` : `# Simplified process model\nmaster = Process(pid=4100)\nmaster.pages = [code, libs, heap, stack]\nmaster.fd[3] = listening_socket`;
+  const code = root.querySelector('#code')!;
+  if (moduleId === 2) {
+    const activeLine = walkStep <= 1 ? 0 : walkStep === 3 ? 2 : walkStep === 4 ? 3 : walkStep === 5 ? 6 : 5;
+    const lines = ['pid = os.fork()', 'if pid == 0:', "    print('child: fork returned 0')", '    os._exit(0)', 'else:', "    print(f'parent: child is {pid}')", '    os.waitpid(pid, 0)  # parent reaps child'];
+    code.innerHTML = lines.map((line, index) => `<span class="code-line ${walkStep >= 0 && index === activeLine ? 'code-active' : ''}">${escapeHtml(line)}</span>`).join('') + (walkStep >= 0 ? `<span class="code-caption">${escapeHtml(walkLabels[walkStep])}</span>` : '');
+    return;
+  }
+  code.textContent = moduleId === 4 ? `# Both processes begin with the same page mapping.\ncounter += 1  # 8-byte change, page-sized copy\n\n# Another process still sees its own value.` : `# Simplified process model\nmaster = Process(pid=4100)\nmaster.pages = [code, libs, heap, stack]\nmaster.fd[3] = listening_socket`;
 }
 
 function render() {
+  const focused = document.activeElement as HTMLElement | null;
+  const focusAttributes = focused ? ['id', 'data-module', 'data-lab', 'data-pid', 'data-page', 'data-page-pid', 'data-frame', 'data-object', 'data-structure', 'data-structure-pid', 'data-structure-index', 'data-step'].flatMap(name => focused.hasAttribute(name) ? [[name, focused.getAttribute(name)]] : []) : [];
   const state = world();
   if (!state.processes.some(p => p.pid === selectedPid)) selectedPid = state.processes[0]?.pid ?? 4100;
   if (selectedFrame !== null && !state.frames.some(f => f.id === selectedFrame)) selectedFrame = null;
   if (selectedObjectId !== null && !state.kernelObjects.some(o => o.id === selectedObjectId)) selectedObjectId = null;
   if (selectedPage && !state.processes.some(p => p.pid === selectedPage!.pid && p.pages[selectedPage!.page] !== null && p.pages[selectedPage!.page] !== undefined)) selectedPage = null;
+  if (selectedStructure) {
+    const process = state.processes.find(p => p.pid === selectedStructure!.pid && p.status === 'running');
+    if (!process || selectedStructure.part === 'cable' && !process.descriptors[selectedStructure.index]
+      || selectedStructure.part === 'thread' && process.threadIds[selectedStructure.index] === undefined
+      || selectedStructure.part === 'stack' && state.processes.length < 2) selectedStructure = null;
+  }
   renderNav(); renderLesson(); renderFlat(state); renderInspector(state); renderLedger(state); renderTimeline(state); renderCode();
   host.hidden = flat;
   (root.querySelector('#flat-host') as HTMLElement).hidden = !flat;
   root.querySelector('#view-toggle')!.textContent = flat ? '◈ 3D view' : '▦ Flat view';
-  scene?.setWorld(state, selectedPid, selectedPage, selectedFrame, selectedObjectId, selection => { selectVisual(selection); });
+  scene?.setWorld(state, selectedPid, selectedPage, selectedFrame, selectedObjectId, selectedStructure, selection => { selectVisual(selection); });
+  if (focused && !focused.isConnected && focusAttributes.length) {
+    const replacement = [...root.querySelectorAll<HTMLElement>(focused.tagName.toLowerCase())].find(element => focusAttributes.every(([name, value]) => element.getAttribute(name!) === value));
+    replacement?.focus({ preventScroll: true });
+  }
   void ensureScene();
 }
 
-function selectVisual(selection: { kind: 'process'; pid: number } | { kind: 'page'; pid: number; page: number } | { kind: 'frame'; frameId: number } | { kind: 'object'; objectId: string }) {
+function selectVisual(selection: SceneSelection) {
   if (answers[moduleId] !== undefined && (moduleId === 1 || moduleId === 3) && selection.kind !== 'process') observedModules[moduleId] = true;
   selectedFrame = selection.kind === 'frame' ? selection.frameId : null;
   selectedObjectId = selection.kind === 'object' ? selection.objectId : null;
-  if (selection.kind === 'process' || selection.kind === 'page') selectedPid = selection.pid;
+  selectedStructure = selection.kind === 'structure' ? { pid: selection.pid, part: selection.part, index: selection.index } : null;
+  if (selection.kind === 'process' || selection.kind === 'page' || selection.kind === 'structure') selectedPid = selection.pid;
   selectedPage = selection.kind === 'page' ? { pid: selection.pid, page: selection.page } : null;
+  if (moduleId === 3 && selection.kind === 'page' && selection.page === 2) {
+    const state = world(), parent = state.processes.find(p => p.pid === 4100), child = state.processes.find(p => p.parentPid === 4100);
+    if (parent && child && (selection.pid === parent.pid || selection.pid === child.pid)) {
+      const before = parent.pages[2] === child.pages[2];
+      const key = `${before ? 'before' : 'after'}${selection.pid === parent.pid ? 'Parent' : 'Child'}` as keyof typeof exercise.trace;
+      const frame = state.processes.find(p => p.pid === selection.pid)?.pages[2];
+      if (frame !== null && frame !== undefined) { exercise.trace[key] = frame; saveExercise(); }
+    }
+  }
   render();
 }
 
-function runAction(action: Action) {
+function runAction(action: Action): boolean {
   try {
     const next = applyAction(world(), action);
     assertInvariants(next);
@@ -187,8 +270,12 @@ function runAction(action: Action) {
     step = history.length - 1;
     actionError = '';
     if (answers[moduleId] !== undefined && (moduleId !== 4 || action.type === 'write')) observedModules[moduleId] = true;
-  } catch (error) { actionError = error instanceof Error ? error.message : String(error); }
+    if (moduleId === 4 && exercise.sizeGuess && history.some(item => item.events.at(-1)?.kind === 'fork') && history.some(item => item.events.at(-1)?.kind === 'cow_fault' && item.events.at(-1)?.pid !== 4100)) {
+      exercise.copyObserved = true; saveExercise();
+    }
+  } catch (error) { actionError = error instanceof Error ? error.message : String(error); render(); return false; }
   render();
+  return true;
 }
 
 root.addEventListener('click', event => {
@@ -198,7 +285,7 @@ root.addEventListener('click', event => {
   const zoom = target.closest<HTMLElement>('[data-zoom]');
   if (zoom) { scene?.setZoom(zoom.dataset.zoom === 'in'); return; }
   const moduleButton = target.closest<HTMLElement>('[data-module]');
-  if (moduleButton) { moduleId = Number(moduleButton.dataset.module) as ModuleId; selectedFrame = null; selectedObjectId = null; selectedPage = null; render(); return; }
+  if (moduleButton) { moduleId = Number(moduleButton.dataset.module) as ModuleId; walkStep = -1; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; render(); return; }
   const stepButton = target.closest<HTMLElement>('[data-step]');
   if (stepButton) { step = Number(stepButton.dataset.step); render(); return; }
   const pidButton = target.closest<HTMLElement>('[data-pid]');
@@ -209,11 +296,23 @@ root.addEventListener('click', event => {
   if (frameButton) { selectVisual({ kind: 'frame', frameId: Number(frameButton.dataset.frame) }); return; }
   const objectButton = target.closest<HTMLElement>('[data-object]');
   if (objectButton) { selectVisual({ kind: 'object', objectId: objectButton.dataset.object! }); return; }
+  const structureButton = target.closest<HTMLElement>('[data-structure]');
+  if (structureButton) { selectVisual({ kind: 'structure', pid: Number(structureButton.dataset.structurePid), part: structureButton.dataset.structure as StructurePart, index: Number(structureButton.dataset.structureIndex) }); return; }
   if (target.closest('#prev-step')) { step = Math.max(0, step - 1); render(); }
   if (target.closest('#next-step')) { step = Math.min(history.length - 1, step + 1); render(); }
-  if (target.closest('#show-event')) { history.splice(0, history.length, ...guidedHistory()); step = Math.min(lessons[moduleId].focus, history.length - 1); selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; actionError = ''; observedModules[moduleId] = true; render(); return; }
-  if (target.closest('#reset-model')) { history.splice(0, history.length, initialWorld()); step = 0; selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; actionError = ''; render(); return; }
-  if (target.closest('#clear-selection')) { selectedFrame = null; selectedObjectId = null; selectedPage = null; render(); return; }
+  if (target.closest('#walk-next')) {
+    if (walkStep < 0) {
+      history.splice(0, history.length, initialWorld()); step = 0; selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; actionError = ''; walkStep = 0;
+    } else if (walkStep === 0) { if (!runAction({ type: 'fork', parentPid: 4100 })) return; walkStep = 1; }
+    else if (walkStep === 1) { selectedPid = 4100; walkStep = 2; }
+    else if (walkStep === 2) { selectedPid = 4101; walkStep = 3; }
+    else if (walkStep === 3) { if (!runAction({ type: 'exit', pid: 4101 })) return; walkStep = 4; }
+    else if (walkStep === 4) { if (!runAction({ type: 'reap', pid: 4101 })) return; walkStep = 5; exercise.forkWalkthroughDone = true; saveExercise(); }
+    observedModules[2] = walkStep > 0; render(); return;
+  }
+  if (target.closest('#show-event')) { history.splice(0, history.length, ...guidedHistory()); step = Math.min(lessons[moduleId].focus, history.length - 1); selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; actionError = ''; walkStep = -1; observedModules[moduleId] = true; if (moduleId === 4 && exercise.sizeGuess) { exercise.copyObserved = true; saveExercise(); } render(); return; }
+  if (target.closest('#reset-model')) { history.splice(0, history.length, initialWorld()); step = 0; selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; actionError = ''; walkStep = -1; if (!traceComplete(exercise.trace)) { exercise.trace = {}; saveExercise(); } render(); return; }
+  if (target.closest('#clear-selection')) { selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; render(); return; }
   const actionButton = target.closest<HTMLElement>('[data-lab]');
   if (actionButton && !actionButton.hasAttribute('disabled')) {
     const state = world(), selected = state.processes.find(p => p.pid === selectedPid);
@@ -238,18 +337,33 @@ root.addEventListener('click', event => {
   }
   if (target.closest('#view-toggle')) { flat = !flat; localStorage.setItem('forkscape-flat', String(flat)); render(); }
   if (target.closest('#export-progress')) {
-    const blob = new Blob([JSON.stringify({ version: 1, answers }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ version: 2, answers, exercises: exercise }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob), link = document.createElement('a');
     link.href = url; link.download = 'forkscape-progress.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 });
 root.addEventListener('input', event => {
-  if ((event.target as HTMLElement).id === 'time-range') { step = Number((event.target as HTMLInputElement).value); render(); }
+  const input = event.target as HTMLInputElement;
+  if (input.id === 'time-range') { step = Number(input.value); render(); }
+  if (input.name === 'fork-size') root.querySelector('#fork-guess-label')!.textContent = kb(forkGuesses[Number(input.value)] * 1024);
+  if (input.name === 'copy-size') root.querySelector('#copy-guess-label')!.textContent = `${copyGuesses[Number(input.value)].toLocaleString()} bytes`;
 });
 root.addEventListener('submit', event => {
-  if ((event.target as HTMLElement).id !== 'prediction-form') return;
-  event.preventDefault();
   const form = event.target as HTMLFormElement;
+  if (form.id === 'classification-form') {
+    event.preventDefault();
+    const values = new FormData(form);
+    exercise.classification = Object.fromEntries(classificationItems.flatMap(item => { const owner = values.get(item.id); return owner === 'process' || owner === 'kernel' ? [[item.id, owner as Owner]] : []; }));
+    exercise.classificationChecked = true; saveExercise(); render(); return;
+  }
+  if (form.id === 'size-form') {
+    event.preventDefault();
+    const values = new FormData(form);
+    exercise.sizeGuess = { forkKiB: forkGuesses[Number(values.get('fork-size'))], copyBytes: copyGuesses[Number(values.get('copy-size'))] };
+    saveExercise(); render(); return;
+  }
+  if (form.id !== 'prediction-form') return;
+  event.preventDefault();
   const value = new FormData(form).get('prediction');
   if (value === null) return;
   answers = { ...answers, [moduleId]: Number(value) };

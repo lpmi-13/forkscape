@@ -13,6 +13,25 @@ npm run dev
 
 Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no backend or container is needed for this first slice. Run `npm test` for model checks and `npm run build` for type checking and a production bundle.
 
+## Preferred Linux experiment runtime
+
+Use an **ephemeral Ubuntu 24.04 VM from `labctl`** for kernel experiments and, later, for generating memory-usage telemetry. This keeps the host environment separate from the measured workload and gives each experiment a fresh Linux session. Check the session's expiration with `labctl playground lifetime <playground-id>`; do not persist a playground when reproducible measurements are the goal.
+
+```bash
+labctl playground start ubuntu-24-04 --title forkscape-reference
+labctl playground status <playground-id>
+labctl ssh <playground-id> -- uname -a
+```
+
+The local Vite app remains the development UI. To run the current reference probe in the VM:
+
+```bash
+labctl cp scripts/reference_probe.py <playground-id>:/tmp/forkscape-reference-probe.py
+labctl ssh <playground-id> -- python3 /tmp/forkscape-reference-probe.py
+```
+
+The probe emits JSON with mapping-local `/proc/<pid>/smaps` readings before and after fork and one child write, process-wide `VmPTE`, and a file-cache residency check. A [sample from an Ubuntu 24.04 VM](docs/reference-probe-2026-10-28.json) is checked in. In that run, a 64 KiB private mapping became shared after fork; one child page write made 4 KiB private in each process. A file page remained resident when remapped after all mappings and descriptors were closed. These are observations from one kernel and workload, not a replacement for a capture pipeline or a general accounting rule. Future telemetry bundles should record the kernel, page size, workload, sampling method, and `/proc` sources alongside every measurement.
+
 ## Status
 
 This repository contains a **runnable model-mode vertical slice**, centered on Modules 1–4. It is not the full MVP described in the plan. All displayed terminal output and memory values are explicitly illustrative model data, not Linux measurements.
@@ -28,13 +47,14 @@ This repository contains a **runnable model-mode vertical slice**, centered on M
 - Model tests for shared frames at fork, page-sized copy, exclusive reuse, PSS accounting, region mapping and release, descriptor offsets, thread/lock inheritance, OOM behavior, and deterministic action walks.
 - Selectable processes, pages, frames, and kernel objects in both 3D and flat views. The 3D view has camera presets, zoom controls, descriptor cables, thread spindles, a page-table sheet, and a model-mode fork stack. The inspector shows the modeled mechanism and related `/proc` evidence.
 - An original visual theme combining a neon dusk city palette with warm, chunky, garden-game shapes. The 3D scene uses a pixel skyline, brighter page tiles, and stacked rings to mark shared frames; the flat view uses the same shared/exclusive colors.
+- Module 1–4 exercises now include process/kernel classification, a fork code walkthrough through zombie/reap, a before/after virtual-address trace, and logarithmic fork/write size predictions. Each has an explicit completion check; results persist and appear in progress export.
+- Cables, page-table sheets, thread spindles, and fork stack blocks have inspector explanations and keyboard-accessible flat/inspector controls. Reduced-motion mode removes hover movement and orbit damping; the scene renders on demand when idle.
+- Stronger descriptor/thread invariants and action-shape checks. A reproducible Linux reference probe runs in the preferred `labctl` VM and records one fork/COW/file-cache comparison.
 
 ### Next: finish Phase 1
 
-- Deepen the Module 1–4 exercises: the process-versus-kernel classification, step-through fork code, address-following task, and copy-size prediction controls described in the plan. Add explicit completion checks for each exercise.
-- Add inspector entries and keyboard alternatives for the remaining decorative and structural scene elements, including cables, page-table sheets, thread spindles, and stack blocks. Extend reduced-motion behavior beyond orbit damping.
-- Validate model simplifications against a reference Linux VM, particularly file-cache lifetime, page-table allocation, and OOM selection. Add stronger property checks for descriptor and thread operations.
-- Validate scene readability and frame budget with learners and an integrated GPU; add flat-mode parity checks and an accessibility review.
+- Extend reference VM validation to varied mapping sizes, page-table allocation, and cgroup OOM victim selection. The one-VM probe already shows why file-cache residency and process-wide `VmPTE` cannot be inferred from the current teaching model.
+- Validate scene readability and frame budget with learners and an integrated GPU; add automated flat-mode parity checks and a manual screen-reader review.
 
 ### Later phases from the plan
 

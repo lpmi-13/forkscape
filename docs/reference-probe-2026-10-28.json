@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "source": "reference_linux_vm",
+  "captured_at": "2026-10-28T13:17:53.454375+00:00",
+  "distribution": "Ubuntu 24.04.5 LTS",
+  "kernel": "6.1.167",
+  "page_size_bytes": 4096,
+  "anonymous_mapping_pages": 16,
+  "anonymous": {
+    "before_fork_parent": {
+      "Rss_kib": 64,
+      "Pss_kib": 64,
+      "Shared_Dirty_kib": 0,
+      "Private_Dirty_kib": 64,
+      "VmPTE_kib": 76
+    },
+    "after_fork_parent": {
+      "Rss_kib": 64,
+      "Pss_kib": 32,
+      "Shared_Dirty_kib": 64,
+      "Private_Dirty_kib": 0,
+      "VmPTE_kib": 76
+    },
+    "after_fork_child": {
+      "Rss_kib": 64,
+      "Pss_kib": 32,
+      "Shared_Dirty_kib": 64,
+      "Private_Dirty_kib": 0,
+      "VmPTE_kib": 72
+    },
+    "after_write_parent": {
+      "Rss_kib": 64,
+      "Pss_kib": 34,
+      "Shared_Dirty_kib": 60,
+      "Private_Dirty_kib": 4,
+      "VmPTE_kib": 76
+    },
+    "after_write_child": {
+      "Rss_kib": 64,
+      "Pss_kib": 34,
+      "Shared_Dirty_kib": 60,
+      "Private_Dirty_kib": 4,
+      "VmPTE_kib": 72
+    }
+  },
+  "file_cache": {
+    "mapped_resident": true,
+    "remapped_resident_before_touch": true
+  }
+}
