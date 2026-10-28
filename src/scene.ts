@@ -4,6 +4,7 @@ import type { WorldState } from './model';
 import { sharers } from './model';
 
 const palette = [0x64debc, 0xb193fa, 0xff91a6, 0x93dfff];
+export type SceneSelection = { kind: 'process'; pid: number } | { kind: 'page'; pid: number; page: number } | { kind: 'frame'; frameId: number } | { kind: 'object'; objectId: string };
 
 export class ForkScene {
   private renderer: THREE.WebGLRenderer;
@@ -19,7 +20,10 @@ export class ForkScene {
   private targets: { element: HTMLDivElement; point: THREE.Vector3 }[] = [];
   private currentWorld?: WorldState;
   private selectedPid = 4100;
-  private onSelect?: (pid: number) => void;
+  private onSelect?: (selection: SceneSelection) => void;
+  private selectedPage: { pid: number; page: number } | null = null;
+  private selectedFrame: number | null = null;
+  private selectedObjectId: string | null = null;
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -79,6 +83,7 @@ export class ForkScene {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(0, 1.2, 0);
     this.controls.enableDamping = true;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) this.controls.enableDamping = false;
     this.controls.minDistance = 8;
     this.controls.maxDistance = 25;
     this.controls.maxPolarAngle = Math.PI / 2.05;
@@ -97,12 +102,29 @@ export class ForkScene {
     this.animate();
   }
 
-  setWorld(world: WorldState, selectedPid: number, onSelect: (pid: number) => void) {
+  setWorld(world: WorldState, selectedPid: number, selectedPage: { pid: number; page: number } | null, selectedFrame: number | null, selectedObjectId: string | null, onSelect: (selection: SceneSelection) => void) {
     this.currentWorld = world;
     this.selectedPid = selectedPid;
+    this.selectedPage = selectedPage;
+    this.selectedFrame = selectedFrame;
+    this.selectedObjectId = selectedObjectId;
     this.onSelect = onSelect;
     this.clear();
     this.build();
+  }
+
+  setCameraPreset(preset: 'overview' | 'process' | 'memory') {
+    if (preset === 'memory') { this.camera.position.set(6, 4, 8); this.controls.target.set(0, .2, 0); }
+    else if (preset === 'process') { this.camera.position.set(5, 6, 8); this.controls.target.set(0, 2.7, 0); }
+    else { this.camera.position.set(9.5, 8.5, 13.5); this.controls.target.set(0, 1.2, 0); }
+    this.controls.update();
+  }
+
+  setZoom(closer: boolean) {
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const distance = THREE.MathUtils.clamp(offset.length() * (closer ? .8 : 1.25), this.controls.minDistance, this.controls.maxDistance);
+    this.camera.position.copy(this.controls.target.clone().add(offset.setLength(distance)));
+    this.controls.update();
   }
 
   private resize = () => {
@@ -148,6 +170,22 @@ export class ForkScene {
     this.label('PHYSICAL FRAMES', new THREE.Vector3(-4.7, .02, 3.25), 'scene-label-small');
     this.label('KERNEL · PAGE TABLES', new THREE.Vector3(-4.65, 1.18, 3.15), 'scene-label-small');
 
+    const objectPositions = new Map<string, THREE.Vector3>();
+    world.kernelObjects.forEach((object, index) => {
+      const x = -3.6 + index * 1.5, z = -3.15;
+      const buoy = new THREE.Mesh(new THREE.CylinderGeometry(.28, .38, .36, 8), new THREE.MeshStandardMaterial({
+        color: object.kind === 'socket' ? 0x65dfcb : 0xf7bc79,
+        emissive: object.kind === 'socket' ? 0x2a9a86 : 0x9d6131,
+        emissiveIntensity: this.selectedObjectId === object.id ? .6 : .18,
+      }));
+      buoy.position.set(x, 1.46, z);
+      buoy.userData.selection = { kind: 'object', objectId: object.id } satisfies SceneSelection;
+      this.dynamic.add(buoy);
+      this.pickables.push(buoy);
+      objectPositions.set(object.id, buoy.position.clone());
+      this.label(`${object.kind.toUpperCase()} · ${object.id}`, new THREE.Vector3(x, 1.82, z), 'scene-label-small');
+    });
+
     const framePositions = new Map<number, THREE.Vector3>();
     world.frames.forEach((frame, index) => {
       const x = (index % 6 - 2.5) * 1.22;
@@ -157,9 +195,17 @@ export class ForkScene {
       const color = count > 1 ? 0xb39cf3 : frame.owner === null ? 0x74dfad : palette[Math.max(ownerIndex, 0) % palette.length];
       const tile = this.makeBox(1.06, .2, 1.02, color, .97);
       tile.position.set(x, .08, z);
+      tile.userData.selection = { kind: 'frame', frameId: frame.id } satisfies SceneSelection;
+      this.pickables.push(tile);
       const tileEdge = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineBasicMaterial({ color: count > 1 ? 0xf1b6ff : 0xd7ffb2, transparent: true, opacity: .75 }));
       tileEdge.position.copy(tile.position);
       this.dynamic.add(tileEdge);
+      if (this.selectedFrame === frame.id) {
+        const marker = new THREE.Mesh(new THREE.TorusGeometry(.59, .035, 4, 16), new THREE.MeshBasicMaterial({ color: 0xffe794 }));
+        marker.rotation.x = -Math.PI / 2;
+        marker.position.set(x, .23, z);
+        this.dynamic.add(marker);
+      }
       if (count > 1) {
         for (let ring = 0; ring < count; ring++) {
           const marker = new THREE.Mesh(new THREE.TorusGeometry(.34 + ring * .075, .018, 4, 12), new THREE.MeshBasicMaterial({ color: ring % 2 ? 0xffd37c : 0xff89d2 }));
@@ -178,23 +224,52 @@ export class ForkScene {
       const y = process.role === 'master' ? 3.5 : 2.65;
       const isSelected = this.selectedPid === process.pid;
       const color = process.role === 'master' ? 0xffc66f : palette[processIndex % palette.length];
-      const deck = this.makeBox(5.4, .17, 1.6, color, process.status === 'zombie' ? .23 : .38);
+      const deck = this.makeBox(5.4, .17, 2.1, color, process.status === 'zombie' ? .23 : .38);
       deck.position.set(x, y, z);
-      deck.userData.pid = process.pid;
+      deck.userData.selection = { kind: 'process', pid: process.pid } satisfies SceneSelection;
       this.pickables.push(deck);
       const border = new THREE.LineSegments(new THREE.EdgesGeometry(deck.geometry), new THREE.LineBasicMaterial({ color: isSelected ? 0xffecad : color, transparent: true, opacity: isSelected ? 1 : .78 }));
       border.position.copy(deck.position);
       this.dynamic.add(border);
       this.label(`${process.role.toUpperCase()} · PID ${process.pid}${process.status === 'zombie' ? ' · ZOMBIE' : ''}`, new THREE.Vector3(x, y + .3, z), isSelected ? 'label-selected' : '');
       if (process.status === 'zombie') return;
-      process.pages.forEach((frameId, pageIndex) => {
-        const px = x + (pageIndex - 2.5) * .79;
-        const tile = this.makeBox(.62, .1, .8, sharers(world, frameId) > 1 ? 0xbdadef : color, .98);
-        tile.position.set(px, y + .15, z);
-        tile.userData.pid = process.pid;
+      const pageTable = this.makeBox(5.1, .025, 1.9, 0xa686d8, .3);
+      pageTable.position.set(x, y - .15, z);
+      process.descriptors.forEach((descriptor, index) => {
+        const point = objectPositions.get(descriptor.objectId);
+        if (point) this.addLine(new THREE.Vector3(x - 2.35 + index * .2, y, z - .7), point, 0xffd38d, .7);
+      });
+      process.threadIds.forEach((tid, index) => {
+        if (index > 3) return;
+        const spindle = new THREE.Mesh(new THREE.CylinderGeometry(.045, .065, .38, 6), new THREE.MeshStandardMaterial({ color: 0xffe18c, emissive: 0xa46b2f, emissiveIntensity: .2 }));
+        spindle.position.set(x + 2.42 - index * .18, y + .29, z + .6);
+        this.dynamic.add(spindle);
+      });
+      if (world.processes.length > 1) {
+        for (let layer = 0; layer < 3; layer++) {
+          const stack = this.makeBox(.38, .12, .3, layer === 2 ? 0xffdc89 : 0x89c7dc);
+          stack.position.set(x + 2.36, y + .22 + layer * .14, z - .55);
+        }
+        this.label(process.role === 'master' ? `fork() → ${world.processes.find(p => p.parentPid === process.pid)?.pid ?? 'PID'}` : 'fork() → 0',
+          new THREE.Vector3(x + 2.35, y + .78, z - .55), 'scene-label-small');
+      }
+      const mappedPages = process.pages.flatMap((frameId, pageIndex) => frameId === null ? [] : [{ frameId, pageIndex }]);
+      if (mappedPages.length > 12) this.label(`+${mappedPages.length - 12} pages · see flat view`, new THREE.Vector3(x, y + .3, z + .9), 'scene-label-small');
+      mappedPages.slice(0, 12).forEach(({ frameId, pageIndex }, visualIndex) => {
+        if (frameId === null) return;
+        const px = x + (visualIndex % 6 - 2.5) * .79;
+        const pz = z + (visualIndex < 6 ? -.45 : .45);
+        const tile = this.makeBox(.62, .1, .7, sharers(world, frameId) > 1 ? 0xbdadef : color, .98);
+        tile.position.set(px, y + .15, pz);
+        tile.userData.selection = { kind: 'page', pid: process.pid, page: pageIndex } satisfies SceneSelection;
         this.pickables.push(tile);
+        if (this.selectedPage?.pid === process.pid && this.selectedPage.page === pageIndex) {
+          const edge = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineBasicMaterial({ color: 0xffe794 }));
+          edge.position.copy(tile.position);
+          this.dynamic.add(edge);
+        }
         const floor = framePositions.get(frameId);
-        if (floor) this.addLine(new THREE.Vector3(px, y, z), new THREE.Vector3(floor.x, .18, floor.z), color, isSelected ? .6 : .22);
+        if (floor) this.addLine(new THREE.Vector3(px, y, pz), new THREE.Vector3(floor.x, .18, floor.z), color, isSelected ? .6 : .22);
       });
     });
   }
@@ -204,7 +279,7 @@ export class ForkScene {
     this.pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1);
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hit = this.raycaster.intersectObjects(this.pickables)[0];
-    if (hit?.object.userData.pid) this.onSelect?.(hit.object.userData.pid as number);
+    if (hit?.object.userData.selection) this.onSelect?.(hit.object.userData.selection as SceneSelection);
   };
 
   private animate = () => {
