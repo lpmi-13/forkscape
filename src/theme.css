@@ -146,3 +146,17 @@ button:focus-visible,input:focus-visible,label:focus-within{outline-color:#ffe07
 .code-line{display:block;white-space:pre-wrap;padding:1px 4px}
 .code-line.code-active{background:#675078;color:#fff5c9;outline:1px solid #dda5b1}
 .code-caption{display:block;margin-top:12px;color:#bdf3d6;font-size:10px}
+.case-curves{display:grid;gap:12px;margin:12px 0}
+.case-curve{padding:10px;border:1px solid #75698e;border-radius:5px;background:#222846}
+.case-curve-title{display:flex;justify-content:space-between;gap:8px;color:#ffe3aa;font-size:11px}
+.case-curve-title span{color:#b8d9d6;font-size:10px}
+.case-bars{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;align-items:end;height:94px;margin-top:7px}
+.case-bars button{display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;height:100%;padding:2px;border:1px solid transparent;border-radius:3px;background:transparent;color:#e8e4d8}
+.case-bars button:hover,.case-bars button[aria-pressed="true"]{background:#4c4268;border-color:#f7d189}
+.case-bars button:focus-visible{outline:3px solid #ffe078;outline-offset:1px}
+.case-bar{display:block;width:100%;max-width:22px;min-height:10px;background:#bb9aea;border:1px solid #e4c2ff;border-radius:3px 3px 0 0}
+.case-curve:nth-child(2) .case-bar{background:#f4ad78;border-color:#ffe0a8}
+.case-bars small{font:9px 'Silkscreen',monospace}
+.case-select{display:grid;gap:4px;margin:11px 0;color:#f5e5d9;font-size:11px}
+.case-select select{width:100%;padding:7px;border:1px solid #91bbba;border-radius:4px;background:#253a59;color:#fff2db;font-size:11px}
+@media(max-width:760px){.module-link{width:20%}.case-curve-title{flex-wrap:wrap}}

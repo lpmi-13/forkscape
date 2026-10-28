@@ -2,23 +2,33 @@ import './style.css';
 import './theme.css';
 import { applyAction, assertInvariants, chargedBytes, guidedHistory, initialWorld, memoryRows, pageTableBytes, physicalBytes, regionForPage, sharers, objectRefCount, type Action, type WorldState } from './model';
 import { classificationComplete, classificationItems, emptyExerciseProgress, forkPageTableKiB, moduleComplete, traceComplete, type ExerciseProgress, type Owner } from './exercises';
+import { CASE_REQUESTS, CATALOG_PAGES, caseComplete, caseHistories, caseMetrics, type CaseKind, type CaseProgress } from './caseStudy';
 import type { ForkScene, SceneSelection, StructurePart } from './scene';
 
-type ModuleId = 1 | 2 | 3 | 4;
-const lessons: Record<ModuleId, { title: string; kicker: string; body: string; question: string; choices: string[]; correct: number; answer: string; onCall: string; evidence: string; focus: number }> = {
+type ModuleId = 1 | 2 | 3 | 4 | 'case';
+type CoreModuleId = Exclude<ModuleId, 'case'>;
+const lessons: Record<CoreModuleId, { title: string; kicker: string; body: string; question: string; choices: string[]; correct: number; answer: string; onCall: string; evidence: string; focus: number }> = {
   1: { title: 'A process is more than code', kicker: '01 / PROCESS ANATOMY', body: 'A process has its own PID, address space, descriptor table, and threads. A descriptor points to an object held by the kernel. Select a deck to inspect its mappings.', question: 'Which item is the kernel object shared through a file descriptor?', choices: ['The process PID', 'The listening socket', 'The process address space'], correct: 1, answer: 'The socket lives in the kernel. The process holds a descriptor that refers to it.', onCall: 'Find the process tree with ps, memory regions in maps, descriptors in fd, and threads in task.', evidence: 'ps -o pid,ppid,rss,cmd --forest · /proc/<pid>/{maps,fd,task}', focus: 0 },
   2: { title: 'One call, two returns', kicker: '02 / FORK', body: 'The parent and child resume at the same line after fork(). The parent receives the child PID; the child receives zero. Their descriptor tables refer to the same socket.', question: 'How many times does the print after fork() run?', choices: ['Once', 'Twice', 'It depends on memory size'], correct: 1, answer: 'Both processes continue from the fork() call, so each reaches print().', onCall: 'A supervising master must reap exited children or zombies remain in the process table.', evidence: 'ps -o pid,ppid,stat,cmd --forest · waitpid()', focus: 1 },
   3: { title: 'Addresses are names', kicker: '03 / VIRTUAL MEMORY', body: 'Each deck tile is one virtual page. Its filament points through a page table to a physical frame below. The same virtual page index can later point to different frames.', question: 'Parent and child print the same address for an object. Does that prove they still share a physical frame?', choices: ['Yes', 'No', 'Only if their PIDs match'], correct: 1, answer: 'An address is meaningful inside one process. Page-table mappings decide which physical frame it reaches.', onCall: 'An identical Python id() value in two workers is not proof of shared physical memory.', evidence: '/proc/<pid>/maps · /proc/<pid>/pagemap (privilege dependent)', focus: 1 },
   4: { title: 'Copy on write', kicker: '04 / PAGE FAULT', body: 'At fork, the data pages stay shared. A first write to a shared page faults, copies the whole page, and changes only the writer’s mapping. Any process can be the writer.', question: 'A child changes one 8-byte value on a shared 4 KiB page. How many bytes are copied?', choices: ['8 bytes', '4,096 bytes', 'The entire process'], correct: 1, answer: 'The kernel copies one page: 4 KiB in this model. Later writes to that exclusive page reuse its frame.', onCall: 'Scattered small writes can grow Private_Dirty quickly; in-process changes never reach sibling workers.', evidence: '/proc/<pid>/smaps_rollup: Private_Dirty · minor faults in /proc/<pid>/stat', focus: 2 },
 };
 
-const history: WorldState[] = [initialWorld()];
+let history: WorldState[] = [initialWorld()];
+let labHistory: WorldState[] | null = null;
+let labStep = 0;
+let labSelection: { pid: number; frame: number | null; object: string | null; page: { pid: number; page: number } | null; structure: { pid: number; part: StructurePart; index: number } | null } | null = null;
+const caseStates = caseHistories();
+let caseKind: CaseKind = 'decay';
+const savedCase = (() => { try { return JSON.parse(localStorage.getItem('forkscape-case') || '{}') as Partial<CaseProgress>; } catch { return {}; } })();
+let caseProgress: CaseProgress = { viewedDecay: false, viewedLeak: false, checked: false, ...savedCase };
+const saveCase = () => localStorage.setItem('forkscape-case', JSON.stringify(caseProgress));
 const root = document.querySelector<HTMLDivElement>('#app')!;
-const saved = (() => { try { return JSON.parse(localStorage.getItem('forkscape-progress') || '{}') as Record<number, number>; } catch { return {}; } })();
-let answers: Record<number, number> = saved;
+const saved = (() => { try { return JSON.parse(localStorage.getItem('forkscape-progress') || '{}') as Record<string, number>; } catch { return {}; } })();
+let answers: Record<string, number> = saved;
 const storedExercise = (() => { try { return JSON.parse(localStorage.getItem('forkscape-exercises') || '{}') as Partial<ExerciseProgress>; } catch { return {}; } })();
 let exercise: ExerciseProgress = { ...emptyExerciseProgress(), ...storedExercise, classification: storedExercise.classification ?? {}, trace: storedExercise.trace ?? {} };
-const observedModules: Record<number, boolean> = {};
+const observedModules: Record<string, boolean> = {};
 let moduleId: ModuleId = 1;
 let step = 0;
 let walkStep = -1;
@@ -54,7 +64,7 @@ root.innerHTML = `
   </header>
   <main class="workspace">
     <aside class="lesson-rail">
-      <div class="rail-heading"><span>GUIDED LAB</span><span>01—04</span></div>
+      <div class="rail-heading"><span>GUIDED LAB</span><span>01—04 + CASE</span></div>
       <nav id="module-nav" aria-label="Modules"></nav>
       <section id="lesson-content"></section>
     </aside>
@@ -91,10 +101,12 @@ async function ensureScene() {
 }
 
 function renderNav() {
-  root.querySelector('#module-nav')!.innerHTML = ([1, 2, 3, 4] as ModuleId[]).map(id => { const complete = moduleComplete(id, answers[id] !== undefined, exercise); return `<button class="module-link ${moduleId === id ? 'active' : ''}" type="button" data-module="${id}" aria-current="${moduleId === id ? 'page' : 'false'}" aria-label="Module ${id}: ${escapeHtml(lessons[id].title)}, ${complete ? 'complete' : 'incomplete'}"><span class="module-number">0${id}</span><span>${escapeHtml(lessons[id].title)}</span><span class="module-check" aria-hidden="true">${complete ? '✓' : '↗'}</span></button>`; }).join('');
+  root.querySelector('#module-nav')!.innerHTML = ([1, 2, 3, 4] as CoreModuleId[]).map(id => { const complete = moduleComplete(id, answers[id] !== undefined, exercise); return `<button class="module-link ${moduleId === id ? 'active' : ''}" type="button" data-module="${id}" aria-current="${moduleId === id ? 'page' : 'false'}" aria-label="Module ${id}: ${escapeHtml(lessons[id].title)}, ${complete ? 'complete' : 'incomplete'}"><span class="module-number">0${id}</span><span>${escapeHtml(lessons[id].title)}</span><span class="module-check" aria-hidden="true">${complete ? '✓' : '↗'}</span></button>`; }).join('')
+    + `<button class="module-link ${moduleId === 'case' ? 'active' : ''}" type="button" data-module="case" aria-current="${moduleId === 'case' ? 'page' : 'false'}" aria-label="Case study: creeping memory, ${caseComplete(caseProgress) ? 'complete' : 'incomplete'}"><span class="module-number">◇</span><span>Creeping memory case</span><span class="module-check" aria-hidden="true">${caseComplete(caseProgress) ? '✓' : '↗'}</span></button>`;
 }
 
 function renderExercise(): string {
+  if (moduleId === 'case') return '';
   if (answers[moduleId] === undefined) return '<p class="exercise-lock">Commit a prediction to unlock this exercise.</p>';
   if (moduleId === 1) {
     const correct = classificationComplete(exercise);
@@ -115,7 +127,29 @@ function renderExercise(): string {
   return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · PREDICT THE SIZES</div><p>For a 200 MiB private mapping, estimate extra memory immediately after fork. Then estimate how much a first 8-byte write copies. Move both logarithmic sliders and commit.</p><form id="size-form"><label class="range-label">Fork overhead <strong id="fork-guess-label">${kb(forkGuesses[forkIndex] * 1024)}</strong><input name="fork-size" type="range" min="0" max="${forkGuesses.length - 1}" value="${forkIndex}" ${guess ? 'disabled' : ''}></label><label class="range-label">First write copies <strong id="copy-guess-label">${copyGuesses[copyIndex].toLocaleString()} bytes</strong><input name="copy-size" type="range" min="0" max="${copyGuesses.length - 1}" value="${copyIndex}" ${guess ? 'disabled' : ''}></label>${guess ? '' : '<button class="primary" type="submit">Commit size predictions</button>'}</form>${guess ? `<p class="exercise-feedback">You predicted ${kb(guess.forkKiB * 1024)} at fork and ${guess.copyBytes.toLocaleString()} bytes on write. This page-table model adds about ${kb(forkPageTableKiB(200) * 1024)} at fork for 200 MiB of mapped data. A first shared-page write copies ${world().pageSize.toLocaleString()} bytes.</p><p class="exercise-feedback" role="status">${observed ? 'Fork and copy-on-write observed. Exercise complete.' : 'Now fork and write page 2 in a child to observe the model outcome.'}</p>` : ''}</div>`;
 }
 
+function renderCaseLesson() {
+  const predicted = caseProgress.prediction !== undefined;
+  const samples = [0, 4, 8, 12, 16, 20, 24];
+  const base = caseMetrics(caseStates.decay[0]).physical;
+  const chart = (kind: CaseKind, title: string) => `<div class="case-curve"><div class="case-curve-title"><strong>${title}</strong><span>${caseProgress[kind === 'decay' ? 'viewedDecay' : 'viewedLeak'] ? 'inspected' : 'inspect request 16 or later'}</span></div><div class="case-bars">${samples.map(request => {
+    const growth = (caseMetrics(caseStates[kind][request]).physical - base) / 1024;
+    return `<button type="button" data-case-kind="${kind}" data-case-step="${request}" aria-pressed="${caseKind === kind && step === request}" aria-label="${title}, request ${request}, physical growth ${growth} KiB"><span class="case-bar" style="height:${10 + growth / 96 * 55}px"></span><small>${request}</small></button>`;
+  }).join('')}</div></div>`;
+  const metrics = caseMetrics(world());
+  const growth = (metrics.physical - base) / 1024;
+  const correct = caseComplete(caseProgress);
+  root.querySelector('#lesson-content')!.innerHTML = `
+    <div class="lesson-kicker">CASE STUDY / MODEL</div><h1>Creeping memory</h1>
+    <p class="lesson-body">A worker serves ${CASE_REQUESTS} requests after inheriting a ${CATALOG_PAGES}-page catalog. In one run it gradually writes catalog pages. In the other it keeps a new page after every request. Each request here stands for one page operation, not a timed Linux sample.</p>
+    <div class="prediction"><div class="section-tag">PREDICT</div><p class="question">Physical use rises during the first eight requests. Is that enough to call it a persistent leak?</p><form id="case-prediction-form">${['Yes, rising use proves objects are retained.', 'No, loss of sharing can also make use rise at first.', 'Only if worker RSS rises too.'].map((choice, index) => `<label class="choice ${caseProgress.prediction === index ? 'chosen' : ''}"><input name="prediction" type="radio" value="${index}" ${caseProgress.prediction === index ? 'checked' : ''} ${predicted ? 'disabled' : ''}><span>${choice}</span></label>`).join('')}${predicted ? '' : '<button class="primary" type="submit">Commit prediction →</button>'}</form>${predicted ? `<div class="answer ${caseProgress.prediction === 1 ? 'correct' : 'review'}"><p>Both histories add one physical page per request at first. Follow them beyond the shared catalog to see where they diverge.</p></div>` : ''}</div>
+    ${predicted ? `<div class="lesson-stage exercise"><div class="section-tag">ACT · COMPARE THE CURVES</div><p>Choose a bar to load that request into the timeline, scene, and ledger. Bars show physical growth above the common post-fork baseline, in KiB. The early bars overlap.</p><div class="case-curves">${chart('decay', 'Catalog writes')}${chart('leak', 'Retained allocations')}</div><p class="exercise-feedback" role="status">${caseKind === 'decay' ? 'Catalog writes' : 'Retained allocations'} · request ${step}: physical growth ${growth} KiB · worker USS ${kb(metrics.workerUss)} · worker RSS ${kb(metrics.workerRss)}. ${step > CATALOG_PAGES && caseKind === 'decay' ? 'All catalog pages have already been copied, so further writes reuse worker frames.' : ''}</p></div>
+    <div class="lesson-stage exercise"><div class="section-tag">BUILD THE CAUSAL LINKS</div><p>Inspect request 16 or later in both histories, then match each curve to its cause and choose the strongest evidence.</p><form id="case-links-form"><label class="case-select">Catalog writes <select name="decay" aria-label="Cause of catalog write curve"><option value="">Choose cause…</option><option value="decay" ${caseProgress.decayCause === 'decay' ? 'selected' : ''}>Previously shared pages become private</option><option value="leak" ${caseProgress.decayCause === 'leak' ? 'selected' : ''}>New pages stay allocated each request</option></select></label><label class="case-select">Retained allocations <select name="leak" aria-label="Cause of retained allocation curve"><option value="">Choose cause…</option><option value="decay" ${caseProgress.leakCause === 'decay' ? 'selected' : ''}>Previously shared pages become private</option><option value="leak" ${caseProgress.leakCause === 'leak' ? 'selected' : ''}>New pages stay allocated each request</option></select></label><label class="case-select">Best distinguishing evidence <select name="evidence" aria-label="Best distinguishing evidence"><option value="">Choose evidence…</option><option value="rss" ${caseProgress.evidence === 'rss' ? 'selected' : ''}>One worker RSS snapshot</option><option value="pid" ${caseProgress.evidence === 'pid' ? 'selected' : ''}>The worker PID alone</option><option value="trend" ${caseProgress.evidence === 'trend' ? 'selected' : ''}>Memory trend and private growth over repeated requests</option></select></label><button class="primary" type="submit">Check links</button></form>${caseProgress.checked ? `<p class="exercise-feedback" role="status">${correct ? 'Case complete. You connected each curve to its cause.' : 'Review the two curves and their page operations, then revise the links.'}</p>` : ''}</div>
+    <div class="on-call"><div class="section-tag">CONNECT · ON CALL</div><p>Catalog writes → copy on write → private pages grow → growth stops when this finite catalog is fully copied. Retained allocations → new pages remain mapped → physical use keeps growing in this run.</p><p>In a real service, compare cgroup memory, summed PSS, Private_Dirty, request volume, and retained heap evidence over enough time. A short plateau or rising RSS alone cannot settle the diagnosis; allocator behavior and recycling can change the shape.</p><code>/proc/&lt;pid&gt;/smaps_rollup · memory.current · allocation profiler</code></div>` : ''}
+  `;
+}
+
 function renderLesson() {
+  if (moduleId === 'case') { renderCaseLesson(); return; }
   const lesson = lessons[moduleId];
   const answered = answers[moduleId] !== undefined;
   const state = world();
@@ -198,9 +232,11 @@ function renderTimeline(state: WorldState) {
   range.value = String(step);
   (root.querySelector('#prev-step') as HTMLButtonElement).disabled = step === 0;
   (root.querySelector('#next-step') as HTMLButtonElement).disabled = step === history.length - 1;
-  root.querySelector('#step-label')!.textContent = `${step + 1} / ${history.length}`;
-  root.querySelector('#event-count')!.textContent = `${history.length} STATES`;
-  root.querySelector('#event-strip')!.innerHTML = history.map((item, index) => `<button type="button" data-step="${index}" class="event-tick ${index === step ? 'active' : ''}" aria-label="Step ${index + 1}: ${escapeHtml(item.events.at(-1)!.kind)}"><span class="tick-icon">${({ start: '●', fork: '⑂', cow_fault: '✦', write: '✎', exit: '×', reap: '↻', oom_kill: '!', mmap: '+', munmap: '−' } as Record<string, string>)[item.events.at(-1)!.kind] ?? '•'}</span><span>${escapeHtml(item.events.at(-1)!.kind.replace('_', ' '))}</span></button>`).join('');
+  root.querySelector('#step-label')!.textContent = moduleId === 'case' ? `REQUEST ${step} / ${CASE_REQUESTS}` : `${step + 1} / ${history.length}`;
+  root.querySelector('#event-count')!.textContent = moduleId === 'case' ? `${caseKind.toUpperCase()} · MODEL` : `${history.length} STATES`;
+  root.querySelector('#event-strip')!.innerHTML = moduleId === 'case'
+    ? [0, 4, 8, 12, 16, 20, 24].map(index => `<button type="button" data-step="${index}" class="event-tick ${index === step ? 'active' : ''}" aria-label="Request ${index}"><span class="tick-icon">${index === 0 ? '⑂' : '•'}</span><span>${index}</span></button>`).join('')
+    : history.map((item, index) => `<button type="button" data-step="${index}" class="event-tick ${index === step ? 'active' : ''}" aria-label="Step ${index + 1}: ${escapeHtml(item.events.at(-1)!.kind)}"><span class="tick-icon">${({ start: '●', fork: '⑂', cow_fault: '✦', write: '✎', exit: '×', reap: '↻', oom_kill: '!', mmap: '+', munmap: '−' } as Record<string, string>)[item.events.at(-1)!.kind] ?? '•'}</span><span>${escapeHtml(item.events.at(-1)!.kind.replace('_', ' '))}</span></button>`).join('');
   root.querySelector('#terminal')!.textContent = event.terminal;
   root.querySelector('#narration')!.textContent = event.description;
   root.querySelector('#scene-heading')!.textContent = event.kind.replace('_', ' ').toUpperCase();
@@ -208,6 +244,12 @@ function renderTimeline(state: WorldState) {
 
 function renderCode() {
   const code = root.querySelector('#code')!;
+  if (moduleId === 'case') {
+    code.textContent = caseKind === 'decay'
+      ? `# Teaching model: finite preloaded catalog\npage = catalog[(request - 1) % ${CATALOG_PAGES}]\nwrite(page)  # first touch copies a shared page\n# Later writes reuse the worker's private frame.`
+      : `# Teaching model: retained allocation\nretained.append(new_page())\n# One more private mapped page remains after each request.`;
+    return;
+  }
   if (moduleId === 2) {
     const activeLine = walkStep <= 1 ? 0 : walkStep === 3 ? 2 : walkStep === 4 ? 3 : walkStep === 5 ? 6 : 5;
     const lines = ['pid = os.fork()', 'if pid == 0:', "    print('child: fork returned 0')", '    os._exit(0)', 'else:', "    print(f'parent: child is {pid}')", '    os.waitpid(pid, 0)  # parent reaps child'];
@@ -278,6 +320,21 @@ function runAction(action: Action): boolean {
   return true;
 }
 
+function selectCase(kind: CaseKind, request: number) {
+  const changedHistory = history !== caseStates[kind];
+  caseKind = kind;
+  history = caseStates[kind];
+  step = Math.max(0, Math.min(CASE_REQUESTS, request));
+  if (changedHistory) {
+    selectedPid = 4101; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null;
+  }
+  if (step >= 16) {
+    caseProgress[kind === 'decay' ? 'viewedDecay' : 'viewedLeak'] = true;
+    saveCase();
+  }
+  render();
+}
+
 root.addEventListener('click', event => {
   const target = event.target as HTMLElement;
   const camera = target.closest<HTMLElement>('[data-camera]');
@@ -285,9 +342,27 @@ root.addEventListener('click', event => {
   const zoom = target.closest<HTMLElement>('[data-zoom]');
   if (zoom) { scene?.setZoom(zoom.dataset.zoom === 'in'); return; }
   const moduleButton = target.closest<HTMLElement>('[data-module]');
-  if (moduleButton) { moduleId = Number(moduleButton.dataset.module) as ModuleId; walkStep = -1; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; render(); return; }
+  if (moduleButton) {
+    const nextModule = moduleButton.dataset.module === 'case' ? 'case' : Number(moduleButton.dataset.module) as CoreModuleId;
+    if (nextModule === 'case' && moduleId !== 'case') {
+      labHistory = history; labStep = step;
+      labSelection = { pid: selectedPid, frame: selectedFrame, object: selectedObjectId, page: selectedPage, structure: selectedStructure };
+      moduleId = 'case'; selectCase(caseKind, 0); return;
+    }
+    if (nextModule !== 'case' && moduleId === 'case' && labHistory) {
+      history = labHistory; step = labStep; labHistory = null;
+      if (labSelection) {
+        selectedPid = labSelection.pid; selectedFrame = labSelection.frame; selectedObjectId = labSelection.object;
+        selectedPage = labSelection.page; selectedStructure = labSelection.structure; labSelection = null;
+      }
+      moduleId = nextModule; walkStep = -1; render(); return;
+    }
+    moduleId = nextModule; walkStep = -1; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; render(); return;
+  }
+  const caseButton = target.closest<HTMLElement>('[data-case-kind][data-case-step]');
+  if (caseButton && moduleId === 'case') { selectCase(caseButton.dataset.caseKind as CaseKind, Number(caseButton.dataset.caseStep)); return; }
   const stepButton = target.closest<HTMLElement>('[data-step]');
-  if (stepButton) { step = Number(stepButton.dataset.step); render(); return; }
+  if (stepButton) { if (moduleId === 'case') selectCase(caseKind, Number(stepButton.dataset.step)); else { step = Number(stepButton.dataset.step); render(); } return; }
   const pidButton = target.closest<HTMLElement>('[data-pid]');
   if (pidButton) { selectVisual({ kind: 'process', pid: Number(pidButton.dataset.pid) }); return; }
   const pageButton = target.closest<HTMLElement>('[data-page]');
@@ -298,8 +373,8 @@ root.addEventListener('click', event => {
   if (objectButton) { selectVisual({ kind: 'object', objectId: objectButton.dataset.object! }); return; }
   const structureButton = target.closest<HTMLElement>('[data-structure]');
   if (structureButton) { selectVisual({ kind: 'structure', pid: Number(structureButton.dataset.structurePid), part: structureButton.dataset.structure as StructurePart, index: Number(structureButton.dataset.structureIndex) }); return; }
-  if (target.closest('#prev-step')) { step = Math.max(0, step - 1); render(); }
-  if (target.closest('#next-step')) { step = Math.min(history.length - 1, step + 1); render(); }
+  if (target.closest('#prev-step')) { if (moduleId === 'case') selectCase(caseKind, step - 1); else { step = Math.max(0, step - 1); render(); } }
+  if (target.closest('#next-step')) { if (moduleId === 'case') selectCase(caseKind, step + 1); else { step = Math.min(history.length - 1, step + 1); render(); } }
   if (target.closest('#walk-next')) {
     if (walkStep < 0) {
       history.splice(0, history.length, initialWorld()); step = 0; selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; actionError = ''; walkStep = 0;
@@ -310,7 +385,7 @@ root.addEventListener('click', event => {
     else if (walkStep === 4) { if (!runAction({ type: 'reap', pid: 4101 })) return; walkStep = 5; exercise.forkWalkthroughDone = true; saveExercise(); }
     observedModules[2] = walkStep > 0; render(); return;
   }
-  if (target.closest('#show-event')) { history.splice(0, history.length, ...guidedHistory()); step = Math.min(lessons[moduleId].focus, history.length - 1); selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; actionError = ''; walkStep = -1; observedModules[moduleId] = true; if (moduleId === 4 && exercise.sizeGuess) { exercise.copyObserved = true; saveExercise(); } render(); return; }
+  if (target.closest('#show-event') && moduleId !== 'case') { history.splice(0, history.length, ...guidedHistory()); step = Math.min(lessons[moduleId].focus, history.length - 1); selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; actionError = ''; walkStep = -1; observedModules[moduleId] = true; if (moduleId === 4 && exercise.sizeGuess) { exercise.copyObserved = true; saveExercise(); } render(); return; }
   if (target.closest('#reset-model')) { history.splice(0, history.length, initialWorld()); step = 0; selectedPid = 4100; selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; actionError = ''; walkStep = -1; if (!traceComplete(exercise.trace)) { exercise.trace = {}; saveExercise(); } render(); return; }
   if (target.closest('#clear-selection')) { selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; render(); return; }
   const actionButton = target.closest<HTMLElement>('[data-lab]');
@@ -337,19 +412,34 @@ root.addEventListener('click', event => {
   }
   if (target.closest('#view-toggle')) { flat = !flat; localStorage.setItem('forkscape-flat', String(flat)); render(); }
   if (target.closest('#export-progress')) {
-    const blob = new Blob([JSON.stringify({ version: 2, answers, exercises: exercise }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ version: 3, answers, exercises: exercise, caseStudy: caseProgress }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob), link = document.createElement('a');
     link.href = url; link.download = 'forkscape-progress.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 });
 root.addEventListener('input', event => {
   const input = event.target as HTMLInputElement;
-  if (input.id === 'time-range') { step = Number(input.value); render(); }
+  if (input.id === 'time-range') { if (moduleId === 'case') selectCase(caseKind, Number(input.value)); else { step = Number(input.value); render(); } }
   if (input.name === 'fork-size') root.querySelector('#fork-guess-label')!.textContent = kb(forkGuesses[Number(input.value)] * 1024);
   if (input.name === 'copy-size') root.querySelector('#copy-guess-label')!.textContent = `${copyGuesses[Number(input.value)].toLocaleString()} bytes`;
 });
 root.addEventListener('submit', event => {
   const form = event.target as HTMLFormElement;
+  if (form.id === 'case-prediction-form') {
+    event.preventDefault();
+    const value = new FormData(form).get('prediction');
+    if (value !== null) { caseProgress.prediction = Number(value); saveCase(); render(); }
+    return;
+  }
+  if (form.id === 'case-links-form') {
+    event.preventDefault();
+    const values = new FormData(form);
+    const decay = values.get('decay'), leak = values.get('leak');
+    caseProgress.decayCause = decay === 'decay' || decay === 'leak' ? decay : undefined;
+    caseProgress.leakCause = leak === 'decay' || leak === 'leak' ? leak : undefined;
+    caseProgress.evidence = String(values.get('evidence') ?? '');
+    caseProgress.checked = true; saveCase(); render(); return;
+  }
   if (form.id === 'classification-form') {
     event.preventDefault();
     const values = new FormData(form);

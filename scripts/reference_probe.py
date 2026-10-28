@@ -2,6 +2,7 @@
 
 Run in a disposable labctl Ubuntu VM. It emits one JSON document to stdout.
 The process-wide VmPTE counter is reported alongside mapping-local smaps values.
+The varied sizes expose page-table steps, but VmPTE includes unrelated Python mappings.
 """
 
 import ctypes
@@ -14,7 +15,15 @@ import tempfile
 
 
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
-MAP_PAGES = 16
+MAP_PAGE_COUNTS = (16, 128, 512, 1024)
+
+
+def vm_pte_kib(pid: int) -> int:
+    with open(f"/proc/{pid}/status", encoding="ascii") as status:
+        for line in status:
+            if line.startswith("VmPTE:"):
+                return int(line.split()[1])
+    raise RuntimeError(f"VmPTE unavailable for PID {pid}")
 
 
 def mapping_metrics(pid: int, address: int) -> dict[str, int]:
@@ -33,11 +42,7 @@ def mapping_metrics(pid: int, address: int) -> dict[str, int]:
             elif inside and line.startswith(("Rss:", "Pss:", "Shared_Dirty:", "Private_Dirty:")):
                 key, amount, _unit = line.split()
                 metrics[key[:-1] + "_kib"] = int(amount)
-    with open(f"/proc/{pid}/status", encoding="ascii") as status:
-        for line in status:
-            if line.startswith("VmPTE:"):
-                metrics["VmPTE_kib"] = int(line.split()[1])
-                break
+    metrics["VmPTE_kib"] = vm_pte_kib(pid)
     return metrics
 
 
@@ -53,18 +58,19 @@ def receive(fd: int) -> bytes:
     return token
 
 
-def anonymous_fork_probe() -> dict[str, dict[str, int]]:
+def anonymous_fork_probe(map_pages: int) -> dict:
     # PROT_NONE guard pages keep the measured VMA separate from Python's other
-    # anonymous mappings, so smaps reports only these MAP_PAGES data pages.
-    size = (MAP_PAGES + 2) * PAGE_SIZE
+    # anonymous mappings, so smaps reports only these data pages.
+    pte_before_map = vm_pte_kib(os.getpid())
+    size = (map_pages + 2) * PAGE_SIZE
     mapping = mmap.mmap(-1, size, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS,
                         prot=mmap.PROT_READ | mmap.PROT_WRITE)
     base = ctypes.addressof(ctypes.c_char.from_buffer(mapping))
     libc = ctypes.CDLL(None, use_errno=True)
-    for guard in (base, base + (MAP_PAGES + 1) * PAGE_SIZE):
+    for guard in (base, base + (map_pages + 1) * PAGE_SIZE):
         if libc.mprotect(ctypes.c_void_p(guard), ctypes.c_size_t(PAGE_SIZE), ctypes.c_int(0)) != 0:
             raise OSError(ctypes.get_errno(), "mprotect failed")
-    for page in range(MAP_PAGES):
+    for page in range(map_pages):
         mapping[(page + 1) * PAGE_SIZE] = 1
     address = base + PAGE_SIZE
     parent_pid = os.getpid()
@@ -103,7 +109,8 @@ def anonymous_fork_probe() -> dict[str, dict[str, int]]:
         os.close(to_child_w)
         os.close(from_child_r)
         mapping.close()
-    return readings
+    return {"mapping_pages": map_pages, "VmPTE_before_map_kib": pte_before_map,
+            "readings": readings}
 
 
 def resident(mapping: mmap.mmap) -> bool:
@@ -138,13 +145,12 @@ def file_cache_probe() -> dict[str, bool]:
 
 if __name__ == "__main__":
     print(json.dumps({
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "reference_linux_vm",
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "distribution": platform.freedesktop_os_release().get("PRETTY_NAME", "unknown"),
         "kernel": platform.release(),
         "page_size_bytes": PAGE_SIZE,
-        "anonymous_mapping_pages": MAP_PAGES,
-        "anonymous": anonymous_fork_probe(),
+        "anonymous_cases": [anonymous_fork_probe(pages) for pages in MAP_PAGE_COUNTS],
         "file_cache": file_cache_probe(),
     }, indent=2))

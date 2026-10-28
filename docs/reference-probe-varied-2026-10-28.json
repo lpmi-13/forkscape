@@ -1,0 +1,178 @@
+{
+  "schema_version": 2,
+  "source": "reference_linux_vm",
+  "captured_at": "2026-10-28T13:37:45.536348+00:00",
+  "distribution": "Ubuntu 24.04.5 LTS",
+  "kernel": "6.1.167",
+  "page_size_bytes": 4096,
+  "anonymous_cases": [
+    {
+      "mapping_pages": 16,
+      "VmPTE_before_map_kib": 76,
+      "readings": {
+        "before_fork_parent": {
+          "Rss_kib": 64,
+          "Pss_kib": 64,
+          "Shared_Dirty_kib": 0,
+          "Private_Dirty_kib": 64,
+          "VmPTE_kib": 76
+        },
+        "after_fork_parent": {
+          "Rss_kib": 64,
+          "Pss_kib": 32,
+          "Shared_Dirty_kib": 64,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 76
+        },
+        "after_fork_child": {
+          "Rss_kib": 64,
+          "Pss_kib": 32,
+          "Shared_Dirty_kib": 64,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 72
+        },
+        "after_write_parent": {
+          "Rss_kib": 64,
+          "Pss_kib": 34,
+          "Shared_Dirty_kib": 60,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 76
+        },
+        "after_write_child": {
+          "Rss_kib": 64,
+          "Pss_kib": 34,
+          "Shared_Dirty_kib": 60,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 72
+        }
+      }
+    },
+    {
+      "mapping_pages": 128,
+      "VmPTE_before_map_kib": 76,
+      "readings": {
+        "before_fork_parent": {
+          "Rss_kib": 512,
+          "Pss_kib": 512,
+          "Shared_Dirty_kib": 0,
+          "Private_Dirty_kib": 512,
+          "VmPTE_kib": 80
+        },
+        "after_fork_parent": {
+          "Rss_kib": 512,
+          "Pss_kib": 256,
+          "Shared_Dirty_kib": 512,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 80
+        },
+        "after_fork_child": {
+          "Rss_kib": 512,
+          "Pss_kib": 256,
+          "Shared_Dirty_kib": 512,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 76
+        },
+        "after_write_parent": {
+          "Rss_kib": 512,
+          "Pss_kib": 258,
+          "Shared_Dirty_kib": 508,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 80
+        },
+        "after_write_child": {
+          "Rss_kib": 512,
+          "Pss_kib": 258,
+          "Shared_Dirty_kib": 508,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 76
+        }
+      }
+    },
+    {
+      "mapping_pages": 512,
+      "VmPTE_before_map_kib": 76,
+      "readings": {
+        "before_fork_parent": {
+          "Rss_kib": 2048,
+          "Pss_kib": 2048,
+          "Shared_Dirty_kib": 0,
+          "Private_Dirty_kib": 2048,
+          "VmPTE_kib": 80
+        },
+        "after_fork_parent": {
+          "Rss_kib": 2048,
+          "Pss_kib": 1024,
+          "Shared_Dirty_kib": 2048,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 80
+        },
+        "after_fork_child": {
+          "Rss_kib": 2048,
+          "Pss_kib": 1024,
+          "Shared_Dirty_kib": 2048,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 76
+        },
+        "after_write_parent": {
+          "Rss_kib": 2048,
+          "Pss_kib": 1026,
+          "Shared_Dirty_kib": 2044,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 80
+        },
+        "after_write_child": {
+          "Rss_kib": 2048,
+          "Pss_kib": 1026,
+          "Shared_Dirty_kib": 2044,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 76
+        }
+      }
+    },
+    {
+      "mapping_pages": 1024,
+      "VmPTE_before_map_kib": 76,
+      "readings": {
+        "before_fork_parent": {
+          "Rss_kib": 4096,
+          "Pss_kib": 4096,
+          "Shared_Dirty_kib": 0,
+          "Private_Dirty_kib": 4096,
+          "VmPTE_kib": 84
+        },
+        "after_fork_parent": {
+          "Rss_kib": 4096,
+          "Pss_kib": 2048,
+          "Shared_Dirty_kib": 4096,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 84
+        },
+        "after_fork_child": {
+          "Rss_kib": 4096,
+          "Pss_kib": 2048,
+          "Shared_Dirty_kib": 4096,
+          "Private_Dirty_kib": 0,
+          "VmPTE_kib": 80
+        },
+        "after_write_parent": {
+          "Rss_kib": 4096,
+          "Pss_kib": 2050,
+          "Shared_Dirty_kib": 4092,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 84
+        },
+        "after_write_child": {
+          "Rss_kib": 4096,
+          "Pss_kib": 2050,
+          "Shared_Dirty_kib": 4092,
+          "Private_Dirty_kib": 4,
+          "VmPTE_kib": 80
+        }
+      }
+    }
+  ],
+  "file_cache": {
+    "mapped_resident": true,
+    "remapped_resident_before_touch": true
+  }
+}
