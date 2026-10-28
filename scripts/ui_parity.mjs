@@ -107,7 +107,8 @@ async function runScenario(flat) {
   const downloadPromise = page.waitForEvent('download');
   await page.locator('#export-progress').click();
   const download = await downloadPromise;
-  const progress = JSON.parse(await readFile(await download.path(), 'utf8'));
+  const downloadPath = await download.path();
+  const progress = JSON.parse(await readFile(downloadPath, 'utf8'));
   assert.equal(progress.version, 3);
   assert.equal(progress.caseStudy.viewedDecay, true);
   assert.equal(progress.caseStudy.viewedLeak, true);
@@ -120,8 +121,26 @@ async function runScenario(flat) {
   assert.equal(await page.locator('#ledger').innerText(), ledger);
   assert.equal(await page.locator('#step-label').innerText(), event);
   assert.equal(await page.locator('.reference-evidence').getAttribute('open'), '');
+
+  await page.locator('#progress-file').setInputFiles({ name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from('{') });
+  assert.match(await page.locator('#import-status').innerText(), /not valid JSON/);
+  assert.equal(await page.locator('#import-review').isVisible(), false);
+  await page.evaluate(() => {
+    localStorage.removeItem('forkscape-progress');
+    localStorage.removeItem('forkscape-exercises');
+    localStorage.removeItem('forkscape-case');
+  });
+  await page.reload();
+  assert.match(await page.locator('[data-module="1"]').getAttribute('aria-label'), /incomplete$/);
+  await page.locator('#progress-file').setInputFiles(downloadPath);
+  assert.match(await page.locator('#import-summary').innerText(), /5 of 5 activities complete/);
+  assert.match(await page.locator('[data-module="1"]').getAttribute('aria-label'), /incomplete$/);
+  await page.locator('#apply-import').click();
+  for (const id of [1, 2, 3, 4, 'case']) await complete(id);
+  await page.reload();
+  for (const id of [1, 2, 3, 4, 'case']) await complete(id);
   await page.close();
-  console.log(`${flat ? 'Flat' : '3D'} mode completed Modules 1–4 and the case; view switch preserved ledger and timeline.`);
+  console.log(`${flat ? 'Flat' : '3D'} mode completed Modules 1–4 and the case; view switch and progress import passed.`);
 }
 
 try {

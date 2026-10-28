@@ -4,6 +4,7 @@ import './reference.css';
 import { applyAction, assertInvariants, chargedBytes, guidedHistory, initialWorld, memoryRows, pageTableBytes, physicalBytes, regionForPage, sharers, objectRefCount, type Action, type WorldState } from './model';
 import { classificationComplete, classificationItems, emptyExerciseProgress, forkPageTableKiB, moduleComplete, traceComplete, type ExerciseProgress, type Owner } from './exercises';
 import { CASE_REQUESTS, CATALOG_PAGES, caseComplete, caseHistories, caseMetrics, type CaseKind, type CaseProgress } from './caseStudy';
+import { MAX_PROGRESS_BYTES, completedCount, parseProgress, type ProgressFile } from './progress';
 import type { ForkScene, SceneSelection, StructurePart } from './scene';
 
 type ModuleId = 1 | 2 | 3 | 4 | 'case';
@@ -29,6 +30,8 @@ const saved = (() => { try { return JSON.parse(localStorage.getItem('forkscape-p
 let answers: Record<string, number> = saved;
 const storedExercise = (() => { try { return JSON.parse(localStorage.getItem('forkscape-exercises') || '{}') as Partial<ExerciseProgress>; } catch { return {}; } })();
 let exercise: ExerciseProgress = { ...emptyExerciseProgress(), ...storedExercise, classification: storedExercise.classification ?? {}, trace: storedExercise.trace ?? {} };
+let pendingProgress: ProgressFile | null = null;
+let importAttempt = 0;
 const observedModules: Record<string, boolean> = {};
 let moduleId: ModuleId = 1;
 let step = 0;
@@ -61,8 +64,10 @@ const walkLabels = [
 root.innerHTML = `
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><span>FORKSCAPE</span><span class="brand-sub">A PROCESS MEMORY LAB</span></div>
-    <div class="top-actions"><span class="badge">MODEL</span><button id="view-toggle" class="subtle" type="button"></button><button id="export-progress" class="subtle" type="button" title="Export your answers as JSON">Export progress</button></div>
+    <div class="top-actions"><span class="badge">MODEL</span><button id="view-toggle" class="subtle" type="button"></button><button id="export-progress" class="subtle" type="button" title="Export your answers as JSON">Export progress</button><button id="import-progress" class="subtle" type="button">Import progress</button><input id="progress-file" class="sr-only" type="file" accept=".json,application/json" aria-label="Choose a progress JSON file"></div>
   </header>
+  <section id="import-review" class="import-review" aria-label="Review imported progress" hidden><span id="import-summary"></span><button id="apply-import" class="subtle" type="button">Replace saved progress</button><button id="cancel-import" class="subtle" type="button">Cancel</button></section>
+  <div id="import-status" class="import-status" role="status" aria-live="polite"></div>
   <main class="workspace">
     <aside class="lesson-rail">
       <div class="rail-heading"><span>GUIDED LAB</span><span>01—04 + CASE</span></div>
@@ -89,6 +94,12 @@ root.innerHTML = `
 `;
 
 const host = root.querySelector<HTMLElement>('#scene-host')!;
+function showImportReview() {
+  const review = root.querySelector<HTMLElement>('#import-review')!;
+  review.hidden = pendingProgress === null;
+  if (pendingProgress) root.querySelector('#import-summary')!.textContent = `Version 3 · ${completedCount(pendingProgress)} of 5 activities complete. This replaces saved learning progress on this device.`;
+}
+function importStatus(message: string) { root.querySelector('#import-status')!.textContent = message; }
 async function ensureScene() {
   if (scene || flat || sceneLoading) return;
   sceneLoading = true;
@@ -338,6 +349,27 @@ function selectCase(kind: CaseKind, request: number) {
 
 root.addEventListener('click', event => {
   const target = event.target as HTMLElement;
+  if (target.closest('#import-progress')) { root.querySelector<HTMLInputElement>('#progress-file')!.click(); return; }
+  if (target.closest('#cancel-import')) { importAttempt++; pendingProgress = null; showImportReview(); importStatus('Import cancelled. Saved progress was not changed.'); root.querySelector<HTMLButtonElement>('#import-progress')!.focus(); return; }
+  if (target.closest('#apply-import') && pendingProgress) {
+    const imported = pendingProgress;
+    const keys = ['forkscape-progress', 'forkscape-exercises', 'forkscape-case'] as const;
+    const previous = keys.map(key => localStorage.getItem(key));
+    try {
+      localStorage.setItem(keys[0], JSON.stringify(imported.answers));
+      localStorage.setItem(keys[1], JSON.stringify(imported.exercises));
+      localStorage.setItem(keys[2], JSON.stringify(imported.caseStudy));
+    } catch {
+      keys.forEach((key, index) => { try { if (previous[index] === null) localStorage.removeItem(key); else localStorage.setItem(key, previous[index]!); } catch { /* Storage is unavailable. */ } });
+      importStatus('Could not save imported progress. Current progress was kept.');
+      return;
+    }
+    answers = imported.answers; exercise = imported.exercises; caseProgress = imported.caseStudy;
+    importAttempt++; pendingProgress = null; showImportReview(); render();
+    importStatus(`Progress imported. ${completedCount(imported)} of 5 activities complete.`);
+    root.querySelector<HTMLButtonElement>('#import-progress')!.focus();
+    return;
+  }
   const camera = target.closest<HTMLElement>('[data-camera]');
   if (camera) { scene?.setCameraPreset(camera.dataset.camera as 'overview' | 'process' | 'memory'); return; }
   const zoom = target.closest<HTMLElement>('[data-zoom]');
@@ -417,6 +449,23 @@ root.addEventListener('click', event => {
     const url = URL.createObjectURL(blob), link = document.createElement('a');
     link.href = url; link.download = 'forkscape-progress.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+});
+root.addEventListener('change', async event => {
+  const input = event.target as HTMLInputElement;
+  if (input.id !== 'progress-file') return;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  const attempt = ++importAttempt;
+  pendingProgress = null; showImportReview();
+  if (file.size > MAX_PROGRESS_BYTES) { importStatus('Progress file is larger than 64 KiB.'); return; }
+  try {
+    const parsed = parseProgress(await file.text());
+    if (attempt !== importAttempt) return;
+    pendingProgress = parsed;
+    showImportReview(); importStatus('Review the imported progress before replacing saved progress.');
+    root.querySelector<HTMLButtonElement>('#apply-import')!.focus();
+  } catch (error) { if (attempt === importAttempt) importStatus(error instanceof Error ? error.message : 'Could not read progress file.'); }
 });
 root.addEventListener('input', event => {
   const input = event.target as HTMLInputElement;

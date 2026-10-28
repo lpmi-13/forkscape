@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no backend or container is needed for this first slice. Run `npm test` for model checks and `npm run build` for type checking and a production bundle. `npm run test:ui` uses system Google Chrome (or `CHROME_BIN`) to complete Modules 1–4 and the case in flat and 3D modes, exercises 3D canvas picking, then checks that switching views preserves the ledger and timeline.
+Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no backend or container is needed for this first slice. Run `npm test` for model checks and `npm run build` for type checking and a production bundle. `npm run test:ui` uses system Google Chrome (or `CHROME_BIN`) to complete Modules 1–4 and the case in flat and 3D modes, exercises 3D canvas picking, checks that switching views preserves the ledger and timeline, and restores exported progress.
 
 ## Preferred Linux experiment runtime
 
@@ -69,6 +69,7 @@ After the MVP, this repository should define a versioned contract for recordings
 - Reference VM probes now cover varied anonymous mapping sizes, process-wide page-table readings, and an isolated cgroup-v2 OOM observation.
 - An automated browser check completes the four guided exercises and case study in flat and 3D modes, exercises canvas picking, and verifies that switching views preserves the selected state.
 - Reference probes repeated on three disposable VMs show a 76–80 KiB process-wide `VmPTE` baseline and variable cgroup event counts. The app presents these as labeled Linux reference observations, separate from the model charge and victim choice.
+- Progress exported as version 3 JSON can now be imported on another browser or device. The frontend validates a file up to 64 KiB, previews its completion count, and replaces local progress only after the learner confirms. Import and export stay in the browser; no upload service is involved.
 
 ### Next: finish the model MVP
 
@@ -82,7 +83,7 @@ After the MVP, this repository should define a versioned contract for recordings
 | 0 — discovery | Further kernel reference checks, renderer and metaphor tests. |
 | 2 — telemetry, deferred beyond MVP | Decide a recording contract and frontend validation for externally produced files, then consider upload and visualization. The repository will not contain a general recording pipeline. |
 | 3 — runtime and measurement | CPython heap/GC model, modeled request scenarios, copy-on-write decay, Module 8, Module 9, sizing calculator, and sandbox controls. Calibration from recordings is deferred. |
-| 4 — drills and pilot | Modules 0 and 10, incident drills D1–D3, concept inventory/map, progress import, expert fact review, accessibility and performance gates, pilot study. |
+| 4 — drills and pilot | Modules 0 and 10, incident drills D1–D3, concept inventory/map, expert fact review, accessibility and performance gates, pilot study. |
 | Conditional | GPU-heavy views only where supported and justified by usability and performance checks. |
 | 5 — extensions | Celery and other prefork systems; live lab and learner recording remain outside the current scope. |
 

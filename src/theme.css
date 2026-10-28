@@ -160,3 +160,8 @@ button:focus-visible,input:focus-visible,label:focus-within{outline-color:#ffe07
 .case-select{display:grid;gap:4px;margin:11px 0;color:#f5e5d9;font-size:11px}
 .case-select select{width:100%;padding:7px;border:1px solid #91bbba;border-radius:4px;background:#253a59;color:#fff2db;font-size:11px}
 @media(max-width:760px){.module-link{width:20%}.case-curve-title{flex-wrap:wrap}}
+
+.import-review{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:10px 16px;background:#263b4d;border-bottom:2px solid #87cdb7;color:#f7ead4;font-size:12px}
+.import-review .subtle{white-space:nowrap}
+.import-status:not(:empty){padding:8px 16px;text-align:center;background:#1a424b;color:#e5f7e9;font-size:12px}
+@media(max-width:760px){.topbar{height:auto;min-height:66px;flex-wrap:wrap;gap:7px;padding-top:8px;padding-bottom:8px}.top-actions{flex-wrap:wrap;justify-content:flex-end}.brand{font-size:13px}.brand-mark{display:none}}
