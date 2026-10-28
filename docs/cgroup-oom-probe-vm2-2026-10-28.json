@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "source": "reference_linux_vm",
+  "captured_at": "2026-10-28T13:48:17.816397+00:00",
+  "distribution": "Ubuntu 24.04.5 LTS",
+  "kernel": "6.1.167",
+  "cgroup_version": 2,
+  "memory_max_bytes": 67108864,
+  "memory_swap_max_bytes": 0,
+  "allocation_per_child_bytes": 36700160,
+  "memory_oom_group": 0,
+  "before_second_allocation": {
+    "memory_current_bytes": 36962304,
+    "events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "children": [
+      {
+        "pid": 1002,
+        "oom_score_adj": 500,
+        "oom_score": 1002
+      },
+      {
+        "pid": 1003,
+        "oom_score_adj": 0,
+        "oom_score": 667
+      }
+    ]
+  },
+  "after_second_allocation": {
+    "memory_current_bytes": 36888576,
+    "events": {
+      "low": 0,
+      "high": 0,
+      "max": 131,
+      "oom": 7,
+      "oom_kill": 1,
+      "oom_group_kill": 0
+    },
+    "exit_codes_before_cleanup": {
+      "1002": -9,
+      "1003": null
+    }
+  }
+}

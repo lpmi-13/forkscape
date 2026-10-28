@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no backend or container is needed for this first slice. Run `npm test` for model checks and `npm run build` for type checking and a production bundle. `npm run test:ui` uses system Google Chrome (or `CHROME_BIN`) to complete Modules 1–4 and the case in flat mode, then checks that switching views preserves the ledger and timeline.
+Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no backend or container is needed for this first slice. Run `npm test` for model checks and `npm run build` for type checking and a production bundle. `npm run test:ui` uses system Google Chrome (or `CHROME_BIN`) to complete Modules 1–4 and the case in flat and 3D modes, exercises 3D canvas picking, then checks that switching views preserves the ledger and timeline.
 
 ## Preferred Linux experiment runtime
 
@@ -30,7 +30,7 @@ labctl cp scripts/reference_probe.py <playground-id>:/tmp/forkscape-reference-pr
 labctl ssh <playground-id> -- python3 /tmp/forkscape-reference-probe.py
 ```
 
-The probe emits JSON with mapping-local `/proc/<pid>/smaps` readings before and after fork and one child write, process-wide `VmPTE`, and a file-cache residency check. The [varied-size VM sample](docs/reference-probe-varied-2026-10-28.json) covers 16, 128, 512, and 1,024 touched pages; the [original 16-page sample](docs/reference-probe-2026-10-28.json) remains available. In the varied sample, each child write made 4 KiB private in both processes. Parent `VmPTE` rose by 0, 4, 4, and 8 KiB respectively from the pre-mapping reading. It is a process-wide counter, so those differences cannot be assigned solely to the test mapping. A file page remained resident when remapped after all mappings and descriptors were closed.
+The probe emits JSON with mapping-local `/proc/<pid>/smaps` readings before and after fork and one child write, process-wide `VmPTE`, and a file-cache residency check. The [three-VM comparison](docs/probe-variance-2026-10-28.md) covers 16, 128, 512, and 1,024 touched pages; the [original 16-page sample](docs/reference-probe-2026-10-28.json) remains available. Each child write made 4 KiB private in both processes. The process-wide `VmPTE` baseline and some mapping-size differences varied between runs, so these readings cannot calibrate a page-table charge for the test mapping. A file page remained resident when remapped after all mappings and descriptors were closed in each run.
 
 The isolated cgroup-v2 probe needs root *inside the disposable VM*. It creates its own 64 MiB cgroup, moves only two probe children into it, records `memory.events` and the child exit codes, then removes the cgroup:
 
@@ -39,7 +39,7 @@ labctl cp scripts/cgroup_oom_probe.py <playground-id>:/tmp/forkscape-cgroup-oom-
 labctl ssh <playground-id> -- sudo -n python3 /tmp/forkscape-cgroup-oom-probe.py
 ```
 
-In the [checked-in OOM sample](docs/cgroup-oom-probe-2026-10-28.json), the first child had `oom_score_adj=500` and was killed when a second child allocated memory; the cgroup's `oom_kill` counter increased by one. These samples are observations from one kernel and workload, not a general accounting or OOM victim-selection rule. Future telemetry bundles should record the kernel, page size, workload, sampling method, and `/proc` and cgroup sources alongside every measurement.
+In [all three checked-in OOM runs](docs/probe-variance-2026-10-28.md), the first child had `oom_score_adj=500` and was killed when a second child allocated memory; the cgroup's `oom_kill` counter increased by one. The other event counts varied. These samples are observations from one kernel and workload, not a general accounting or OOM victim-selection rule. Future telemetry bundles should record the kernel, page size, workload, sampling method, and `/proc` and cgroup sources alongside every measurement.
 
 ## Status
 
@@ -61,12 +61,13 @@ This repository contains a **runnable model-mode vertical slice**, centered on M
 - Stronger descriptor/thread invariants and action-shape checks. A reproducible Linux reference probe runs in the preferred `labctl` VM and records one fork/COW/file-cache comparison.
 - A creeping-memory case study contrasts finite copy-on-write decay with a retained-page leak across 24 modeled requests. Learners predict, inspect both histories in the same timeline/scene/ledger, and connect each curve to a mechanism and evidence. Completion persists and appears in progress export. It is a teaching comparison, not a calibrated CPython or Linux recording.
 - Reference VM probes now cover varied anonymous mapping sizes, process-wide page-table readings, and an isolated cgroup-v2 OOM observation.
-- An automated browser check completes the four guided exercises and case study in flat mode and verifies that switching views preserves the selected state.
+- An automated browser check completes the four guided exercises and case study in flat and 3D modes, exercises canvas picking, and verifies that switching views preserves the selected state.
+- Reference probes repeated on three disposable VMs show a 76–80 KiB process-wide `VmPTE` baseline and variable cgroup event counts. The app presents these as labeled Linux reference observations, separate from the model charge and victim choice.
 
 ### Next: finish Phase 1
 
-- Repeat the reference probes across fresh VMs and workloads to establish variance, then decide how the model should display page-table and cgroup evidence. The single-VM observations cannot calibrate a deployment model.
-- Validate scene readability and frame budget with learners and an integrated GPU; expand automated interaction checks to the 3D scene and conduct a manual screen-reader review.
+- Probe additional kernels, allocation patterns, and memory limits before choosing representative replay distributions. The three current VMs share one image and kernel.
+- Validate scene readability with learners and frame budget on an integrated GPU; conduct a manual screen-reader review.
 
 ### Later phases from the plan
 
