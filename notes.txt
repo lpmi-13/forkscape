@@ -1,1 +1,2 @@
 - if there's a standard format for telemetry (maybe from perf or a different memory profiler), see if we can suggest that and just validate that the uploaded data adheres to that standard.
+- see if we can add anything interesting from https://blog.codingconfessions.com/p/virtual-memory

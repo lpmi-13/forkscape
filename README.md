@@ -43,7 +43,7 @@ In [all three checked-in OOM runs](docs/probe-variance-2026-10-28.md), the first
 
 ## Status
 
-This repository contains a **runnable model-mode vertical slice**, centered on Modules 1–4 plus a creeping-memory case study. The current MVP is model-only, narrower than the original plan. All displayed terminal output and memory values are explicitly illustrative model data, not Linux measurements.
+This repository contains a **runnable model-mode vertical slice**, centered on Modules 1–4 plus a creeping-memory case study. The current MVP is model-only, narrower than the original plan. All displayed memory values are explicitly illustrative model data, not Linux measurements.
 
 ### MVP boundary
 
@@ -57,19 +57,20 @@ After the MVP, this repository should define a versioned contract for recordings
 - Flat, keyboard-accessible process/page/frame view using the same state as 3D. The app falls back to flat mode if WebGL initialization fails.
 - Pure deterministic model with `fork`, copy-on-write fault, exclusive-frame reuse, `mmap`/`munmap`, file-backed shared mappings, simplified page-table charges, memory limits and OOM selection, process exit, and zombie/reap.
 - Descriptor objects with inherited references and shared file offsets; threads and locks with only one thread surviving `fork` and held locks remaining held in the child.
-- Guided content for Modules 1–4 with predict → act → observe → explain → connect stages. Learners can fork, write, compare counters, exit, reap, inspect mappings and descriptors, and branch the timeline from an earlier state. Answers persist in local storage and can be exported as JSON.
-- Linked event timeline, RSS/PSS/USS ledger, illustrative terminal, code context, and inspector. Scrubbing selects one world-state snapshot for every view.
+- Guided content for Modules 1–4 with predict → act → observe → explain → connect stages. Learners can fork, write, compare counters, exit, reap, inspect mappings and descriptors, and branch the timeline from an earlier state. Answers persist in local storage.
+- Linked event timeline, RSS/PSS/USS ledger, and inspector. Scrubbing selects one world-state snapshot for every view.
 - Model tests for shared frames at fork, page-sized copy, exclusive reuse, PSS accounting, region mapping and release, descriptor offsets, thread/lock inheritance, OOM behavior, and deterministic action walks.
 - Selectable processes, pages, frames, and kernel objects in both 3D and flat views. The 3D view has camera presets, zoom controls, descriptor cables, thread spindles, a page-table sheet, and a model-mode fork stack. The inspector shows the modeled mechanism and related `/proc` evidence.
-- An original visual theme combining a neon dusk city palette with warm, chunky, garden-game shapes. The 3D scene uses a pixel skyline, brighter page tiles, and stacked rings to mark shared frames; the flat view uses the same shared/exclusive colors.
-- Module 1–4 exercises now include process/kernel classification, a fork code walkthrough through zombie/reap, a before/after virtual-address trace, and logarithmic fork/write size predictions. Each has an explicit completion check; results persist and appear in progress export.
+- An original visual theme combining a neon dusk palette with warm, chunky, garden-game shapes. The 3D scene uses brighter page tiles and stacked rings to mark shared frames on a plain backdrop; the flat view uses the same shared/exclusive colors.
+- The 3D or flat scene fills the window, with the 3D/flat toggle in the top-right corner. Everything else — guided lab, inspector, event timeline, memory ledger, and camera controls and legend — sits behind a menu that starts collapsed and opens one panel at a time: beside the scene on wide screens, above it on narrow ones. Escape closes the menu or the open panel. On tall, narrow screens the 3D camera widens its field of view so the whole frame floor stays in view. Scene labels stay inside the scene and never overlap: a label moves below its object when the space above is taken, and otherwise the less important label is hidden (processes, then fork returns, kernel objects, frames, and layer names). On phones, frame labels drop the sharer count.
+- Module 1–4 exercises now include process/kernel classification, a fork walkthrough through zombie/reap, a before/after virtual-address trace, and logarithmic fork/write size predictions. Each has an explicit completion check, and results persist.
 - Cables, page-table sheets, thread spindles, and fork stack blocks have inspector explanations and keyboard-accessible flat/inspector controls. Reduced-motion mode removes hover movement and orbit damping; the scene renders on demand when idle.
 - Stronger descriptor/thread invariants and action-shape checks. A reproducible Linux reference probe runs in the preferred `labctl` VM and records one fork/COW/file-cache comparison.
-- A creeping-memory case study contrasts finite copy-on-write decay with a retained-page leak across 24 modeled requests. Learners predict, inspect both histories in the same timeline/scene/ledger, and connect each curve to a mechanism and evidence. Completion persists and appears in progress export. It is a teaching comparison, not a calibrated CPython or Linux recording.
+- A creeping-memory case study contrasts finite copy-on-write decay with a retained-page leak across 24 modeled requests. Learners predict, inspect both histories in the same timeline/scene/ledger, and connect each curve to a mechanism and evidence. Completion persists. It is a teaching comparison, not a calibrated CPython or Linux recording.
 - Reference VM probes now cover varied anonymous mapping sizes, process-wide page-table readings, and an isolated cgroup-v2 OOM observation.
 - An automated browser check completes the four guided exercises and case study in flat and 3D modes, exercises canvas picking, and verifies that switching views preserves the selected state.
 - Reference probes repeated on three disposable VMs show a 76–80 KiB process-wide `VmPTE` baseline and variable cgroup event counts. The app presents these as labeled Linux reference observations, separate from the model charge and victim choice.
-- Progress exported as version 3 JSON can now be imported on another browser or device. The frontend validates a file up to 64 KiB, previews its completion count, and replaces local progress only after the learner confirms. Import and export stay in the browser; no upload service is involved.
+- Progress import/export (version 3 JSON, validated in `src/progress.ts`) is hidden from the UI for the MVP.
 
 ### Next: finish the model MVP
 

@@ -4,7 +4,6 @@ import './reference.css';
 import { applyAction, assertInvariants, chargedBytes, guidedHistory, initialWorld, memoryRows, pageTableBytes, physicalBytes, regionForPage, sharers, objectRefCount, type Action, type WorldState } from './model';
 import { classificationComplete, classificationItems, emptyExerciseProgress, forkPageTableKiB, moduleComplete, traceComplete, type ExerciseProgress, type Owner } from './exercises';
 import { CASE_REQUESTS, CATALOG_PAGES, caseComplete, caseHistories, caseMetrics, type CaseKind, type CaseProgress } from './caseStudy';
-import { MAX_PROGRESS_BYTES, completedCount, parseProgress, type ProgressFile } from './progress';
 import type { ForkScene, SceneSelection, StructurePart } from './scene';
 
 type ModuleId = 1 | 2 | 3 | 4 | 'case';
@@ -30,8 +29,6 @@ const saved = (() => { try { return JSON.parse(localStorage.getItem('forkscape-p
 let answers: Record<string, number> = saved;
 const storedExercise = (() => { try { return JSON.parse(localStorage.getItem('forkscape-exercises') || '{}') as Partial<ExerciseProgress>; } catch { return {}; } })();
 let exercise: ExerciseProgress = { ...emptyExerciseProgress(), ...storedExercise, classification: storedExercise.classification ?? {}, trace: storedExercise.trace ?? {} };
-let pendingProgress: ProgressFile | null = null;
-let importAttempt = 0;
 const observedModules: Record<string, boolean> = {};
 let moduleId: ModuleId = 1;
 let step = 0;
@@ -45,6 +42,10 @@ let actionError = '';
 let flat = localStorage.getItem('forkscape-flat') === 'true';
 let scene: ForkScene | null = null;
 let sceneLoading = false;
+type PanelId = 'lesson' | 'inspector' | 'timeline' | 'ledger' | 'view';
+const panelLabels: Record<PanelId, string> = { lesson: 'Guided lab', inspector: 'Inspector', timeline: 'Event timeline', ledger: 'Memory ledger', view: 'Camera & legend' };
+let openPanel: PanelId | null = null;
+let menuOpen = false;
 
 const escapeHtml = (value: string | number) => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 const kb = (bytes: number) => `${Number.isInteger(bytes / 1024) ? bytes / 1024 : (bytes / 1024).toFixed(1)} KiB`;
@@ -55,51 +56,51 @@ const copyGuesses = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 81
 const walkLabels = [
   'Before fork(): only the master exists.',
   'fork() returns in both processes. The parent receives the child PID; the child receives 0.',
-  'The parent follows the nonzero branch and prints the child PID.',
-  'The child follows the zero branch and prints its own message.',
+  'The parent sees a nonzero return value, so it takes the parent branch and prints the child PID.',
+  'The child sees 0, so it takes the child branch and prints its own message.',
   'The child exits and remains as a zombie until its parent waits.',
   'The parent calls waitpid(); the zombie is reaped.',
 ];
 
+const drawer = (id: PanelId, meta: string, body: string, className = '', metaId = '') => `<section class="drawer-panel ${className}" data-panel-id="${id}" aria-label="${escapeHtml(panelLabels[id])}" tabindex="-1" hidden><div class="panel-heading"><span>${escapeHtml(panelLabels[id].toUpperCase())}</span><span class="panel-meta"${metaId ? ` id="${metaId}"` : ''}>${meta}</span><button class="panel-close" type="button" data-close-panel aria-label="Close ${escapeHtml(panelLabels[id].toLowerCase())}">×</button></div>${body}</section>`;
+
 root.innerHTML = `
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><span>FORKSCAPE</span><span class="brand-sub">A PROCESS MEMORY LAB</span></div>
-    <div class="top-actions"><span class="badge">MODEL</span><button id="view-toggle" class="subtle" type="button"></button><button id="export-progress" class="subtle" type="button" title="Export your answers as JSON">Export progress</button><button id="import-progress" class="subtle" type="button">Import progress</button><input id="progress-file" class="sr-only" type="file" accept=".json,application/json" aria-label="Choose a progress JSON file"></div>
-  </header>
-  <section id="import-review" class="import-review" aria-label="Review imported progress" hidden><span id="import-summary"></span><button id="apply-import" class="subtle" type="button">Replace saved progress</button><button id="cancel-import" class="subtle" type="button">Cancel</button></section>
-  <div id="import-status" class="import-status" role="status" aria-live="polite"></div>
+  <div class="menu-dock">
+    <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Forkscape menu" aria-expanded="false" aria-controls="panel-menu"><span class="brand-mark" aria-hidden="true">☰</span><span class="brand">FORKSCAPE</span></button>
+    <nav id="panel-menu" class="panel-menu" aria-label="Panels" hidden><div class="menu-heading"><span>A PROCESS MEMORY LAB</span><span class="badge">MODEL</span></div>${(Object.keys(panelLabels) as PanelId[]).map(id => `<button type="button" data-panel="${id}" aria-pressed="false">${escapeHtml(panelLabels[id])}</button>`).join('')}</nav>
+  </div>
+  <button id="view-toggle" class="view-toggle" type="button"></button>
   <main class="workspace">
-    <aside class="lesson-rail">
-      <div class="rail-heading"><span>GUIDED LAB</span><span>01—04 + CASE</span></div>
-      <nav id="module-nav" aria-label="Modules"></nav>
-      <section id="lesson-content"></section>
-    </aside>
     <section class="scene-column" aria-label="Process and memory visualization">
-      <div class="scene-toolbar"><div><span class="toolbar-dot"></span> LIVE MODEL STATE <span class="toolbar-separator">/</span> <span id="scene-heading"></span></div><div class="camera-controls" aria-label="3D camera controls"><button type="button" data-camera="overview">Overview</button><button type="button" data-camera="process">Decks</button><button type="button" data-camera="memory">Frames</button><button type="button" data-zoom="in" aria-label="Zoom in">＋</button><button type="button" data-zoom="out" aria-label="Zoom out">−</button></div></div>
       <div id="scene-host" class="scene-host"></div>
       <div id="flat-host" class="flat-host" hidden></div>
-      <div class="scene-footer"><span>1 tile = 1 page = 4 KiB</span><span><i class="legend-swatch shared"></i> shared <i class="legend-swatch private"></i> exclusive</span><span>Physical layout is schematic</span></div>
     </section>
-    <aside id="inspector" class="inspector"></aside>
-    <section class="timeline-panel">
-      <div class="panel-heading"><span>EVENT TIMELINE</span><span id="event-count"></span></div>
-      <div class="timeline-controls"><button id="prev-step" type="button" aria-label="Previous event">◀</button><button id="next-step" type="button" aria-label="Next event">▶</button><input id="time-range" type="range" min="0" max="0" value="0" aria-label="Timeline event" /><span id="step-label"></span></div>
-      <div id="event-strip" class="event-strip"></div>
-    </section>
-    <section class="ledger-panel"><div class="panel-heading"><span>MEMORY LEDGER</span><span>MODEL · PAGE TABLES INCLUDED IN CHARGE</span></div><div id="ledger"></div><details class="reference-evidence"><summary>Linux reference observations · 3 VM runs</summary><p>In 16–1,024 page probes, one child write made 4 KiB private in each process. Parent <code>VmPTE</code> rose by 0–8 KiB after mapping, with a 76–80 KiB process-wide baseline. These readings cannot isolate the test mapping’s page tables.</p><p>With a 64 MiB cgroup limit, <code>memory.events: oom_kill</code> rose by one in each run. The higher <code>oom_score_adj</code> child was killed in this workload; the model’s victim choice is only a teaching rule.</p></details></section>
-    <section class="terminal-panel"><div class="panel-heading"><span>TERMINAL REPLAY</span><span>ILLUSTRATIVE · MODEL</span></div><pre id="terminal"></pre></section>
-    <section class="code-panel"><div class="panel-heading"><span>CODE CONTEXT</span><span>PYTHON</span></div><pre id="code"></pre></section>
+    ${drawer('lesson', '01—04 + CASE', '<nav id="module-nav" aria-label="Modules"></nav><section id="lesson-content"></section>', 'lesson-rail')}
+    ${drawer('inspector', 'MODEL', '<div id="inspector" class="inspector"></div>')}
+    ${drawer('timeline', '', '<div class="timeline-controls"><button id="prev-step" type="button" aria-label="Previous event">◀</button><button id="next-step" type="button" aria-label="Next event">▶</button><input id="time-range" type="range" min="0" max="0" value="0" aria-label="Timeline event" /><span id="step-label"></span></div><div id="event-strip" class="event-strip"></div>', 'timeline-panel', 'event-count')}
+    ${drawer('ledger', 'MODEL · PAGE TABLES INCLUDED IN CHARGE', '<div id="ledger"></div><details class="reference-evidence"><summary>Linux reference observations · 3 VM runs</summary><p>In 16–1,024 page probes, one child write made 4 KiB private in each process. Parent <code>VmPTE</code> rose by 0–8 KiB after mapping, with a 76–80 KiB process-wide baseline. These readings cannot isolate the test mapping’s page tables.</p><p>With a 64 MiB cgroup limit, <code>memory.events: oom_kill</code> rose by one in each run. The higher <code>oom_score_adj</code> child was killed in this workload; the model’s victim choice is only a teaching rule.</p></details>', 'ledger-panel')}
+    ${drawer('view', 'MODEL', '<div class="panel-body"><div class="section-tag">3D CAMERA</div><div class="camera-controls" aria-label="3D camera controls"><button type="button" data-camera="overview">Overview</button><button type="button" data-camera="process">Decks</button><button type="button" data-camera="memory">Frames</button><button type="button" data-zoom="in" aria-label="Zoom in">＋</button><button type="button" data-zoom="out" aria-label="Zoom out">−</button></div><div class="section-tag">LEGEND</div><ul class="legend"><li>1 tile = 1 page = 4 KiB</li><li><i class="legend-swatch shared"></i>shared</li><li><i class="legend-swatch private"></i>exclusive</li><li>Physical layout is schematic</li></ul></div>')}
   </main>
   <div id="narration" class="sr-only" aria-live="polite"></div>
 `;
 
 const host = root.querySelector<HTMLElement>('#scene-host')!;
-function showImportReview() {
-  const review = root.querySelector<HTMLElement>('#import-review')!;
-  review.hidden = pendingProgress === null;
-  if (pendingProgress) root.querySelector('#import-summary')!.textContent = `Version 3 · ${completedCount(pendingProgress)} of 5 activities complete. This replaces saved learning progress on this device.`;
+const hasTimeline = () => moduleId === 'case' || history.length > 1;
+function renderChrome() {
+  if (openPanel === 'timeline' && !hasTimeline()) openPanel = null;
+  const toggle = root.querySelector<HTMLButtonElement>('#menu-toggle')!;
+  toggle.setAttribute('aria-expanded', String(menuOpen));
+  toggle.querySelector('.brand-mark')!.textContent = menuOpen ? '✕' : '☰';
+  root.querySelector<HTMLElement>('#panel-menu')!.hidden = !menuOpen;
+  root.querySelector<HTMLElement>('[data-panel="timeline"]')!.hidden = !hasTimeline();
+  root.querySelectorAll<HTMLElement>('[data-panel]').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.panel === openPanel)));
+  root.querySelectorAll<HTMLElement>('[data-panel-id]').forEach(panel => { panel.hidden = panel.dataset.panelId !== openPanel; });
+  root.querySelector('.workspace')!.classList.toggle('panel-open', openPanel !== null);
 }
-function importStatus(message: string) { root.querySelector('#import-status')!.textContent = message; }
+function showPanel(id: PanelId | null) {
+  openPanel = id; menuOpen = false; renderChrome();
+  root.querySelector<HTMLElement>(id ? `[data-panel-id="${id}"]` : '#menu-toggle')!.focus({ preventScroll: true });
+}
 async function ensureScene() {
   if (scene || flat || sceneLoading) return;
   sceneLoading = true;
@@ -125,7 +126,7 @@ function renderExercise(): string {
     return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · SORT THE PARTS</div><p>Choose where each item belongs. A process owns references to kernel objects.</p><form id="classification-form"><div class="sort-list">${classificationItems.map(item => `<label><span>${escapeHtml(item.label)}</span><select name="${item.id}" aria-label="${escapeHtml(item.label)} belongs to"><option value="">Choose…</option><option value="process" ${exercise.classification[item.id] === 'process' ? 'selected' : ''}>Process</option><option value="kernel" ${exercise.classification[item.id] === 'kernel' ? 'selected' : ''}>Kernel</option></select></label>`).join('')}</div><button class="primary" type="submit">Check classification</button></form>${exercise.classificationChecked ? `<p class="exercise-feedback" role="status">${correct ? 'All six are placed correctly. Exercise complete.' : 'Some placements need another look. The descriptor table belongs to a process; the object it refers to lives in the kernel.'}</p>` : ''}</div>`;
   }
   if (moduleId === 2) {
-    return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · FOLLOW BOTH RETURNS</div><p>${walkStep < 0 ? 'Start at the fork line, then advance through each branch, child exit, and parent reap.' : escapeHtml(walkLabels[walkStep])}</p><p class="exercise-feedback" role="status">${exercise.forkWalkthroughDone ? 'Walkthrough complete.' : walkStep < 0 ? '0 of 6 code states visited.' : `${walkStep + 1} of 6 code states visited.`}</p><button type="button" class="event-button" id="walk-next" ${walkStep === 5 ? 'disabled' : ''}>${walkStep < 0 ? 'Start code walkthrough' : 'Next code step →'}</button><p class="exercise-note">Starting the walkthrough loads a fresh model run. The event timeline remains available for reviewing states.</p></div>`;
+    return `<div class="lesson-stage exercise"><div class="section-tag">EXERCISE · FOLLOW BOTH RETURNS</div><p>${walkStep < 0 ? 'Step through one fork: both processes return, each takes its own branch, the child exits, and the parent reaps it.' : escapeHtml(walkLabels[walkStep])}</p><p class="exercise-feedback" role="status">${exercise.forkWalkthroughDone ? 'Walkthrough complete.' : walkStep < 0 ? '0 of 6 steps visited.' : `${walkStep + 1} of 6 steps visited.`}</p><button type="button" class="event-button" id="walk-next" ${walkStep === 5 ? 'disabled' : ''}>${walkStep < 0 ? 'Start walkthrough' : 'Next step →'}</button><p class="exercise-note">Starting the walkthrough loads a fresh model run. The event timeline remains available for reviewing states.</p></div>`;
   }
   if (moduleId === 3) {
     const trace = exercise.trace;
@@ -228,7 +229,7 @@ function renderInspector(state: WorldState) {
     : page !== null && pageFrame && region
       ? `<h2>Virtual page <em>${page}</em></h2><p>PID ${process.pid} → frame F${pageFrame.id}</p><div class="inspector-rung"><span>METAPHOR</span><p>A tile on PID ${process.pid}'s deck; its filament points to the floor.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>${escapeHtml(region.name)} · ${region.kind} · ${region.sharing} · ${region.writable ? 'writable' : 'read-only'}. ${sharers(state, pageFrame.id)} mapping(s) reach this frame. Model write revision: ${pageFrame.revision}.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/maps · smaps_rollup</code><small>Virtual page to exact frame requires privileged pagemap access. This mapping is modeled.</small></div><button type="button" data-frame="${pageFrame.id}" class="subtle">Inspect frame F${pageFrame.id}</button>`
       : `<h2>${process.role === 'master' ? 'Master' : 'Worker'} <em>PID ${process.pid}</em></h2><p>${process.status === 'zombie' ? 'Exited · awaiting reaping' : `${process.pages.filter(id => id !== null).length} mapped pages · ${process.threadIds.length} thread(s)`}</p><div class="inspector-rung"><span>METAPHOR</span><p>A deck with page tiles and descriptor ports.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Address space: ${process.regions.map(r => `${escapeHtml(r.name)} (${r.pageCount}p)`).join(', ') || 'released'}. Page tables: ${kb(process.status === 'running' ? state.pageSize * (1 + new Set(process.pages.flatMap((id, index) => id === null ? [] : [Math.floor(index / 512)])).size) : 0)}.</p><p>Descriptors: ${process.descriptors.map(fd => { const object = state.kernelObjects.find(o => o.id === fd.objectId)!; return `fd ${fd.fd} → ${escapeHtml(object.id)} (${object.kind}, ${objectRefCount(state, object.id)} refs${object.kind === 'file' ? `, offset ${object.offset}` : ''})`; }).join('; ') || 'none'}.</p><p>Threads: ${process.threadIds.join(', ') || 'none'}. Locks: ${process.locks.map(lock => `${escapeHtml(lock.id)} → ${lock.ownerTid ?? 'free'}${lock.ownerTid !== null && !process.threadIds.includes(lock.ownerTid) ? ' (owner absent after fork)' : ''}`).join('; ') || 'none'}.</p><p>Counter: ${process.counter} in this process.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>ps · /proc/${process.pid}/maps · fd · task</code><small>All values shown here are model data.</small></div><div class="structure-list" aria-label="Inspect scene parts">${structureButtons(state, process.pid)}</div>`);
-  root.querySelector('#inspector')!.innerHTML = `<div class="panel-heading"><span>INSPECTOR</span><span>MODEL</span></div><div class="inspector-content">${body}<button id="clear-selection" type="button" class="subtle" ${object || frame || page !== null || structure ? '' : 'hidden'}>← Process</button></div>`;
+  root.querySelector('#inspector')!.innerHTML = `<div class="inspector-content">${body}<button id="clear-selection" type="button" class="subtle" ${object || frame || page !== null || structure ? '' : 'hidden'}>← Process</button></div>`;
 }
 
 function renderLedger(state: WorldState) {
@@ -249,26 +250,7 @@ function renderTimeline(state: WorldState) {
   root.querySelector('#event-strip')!.innerHTML = moduleId === 'case'
     ? [0, 4, 8, 12, 16, 20, 24].map(index => `<button type="button" data-step="${index}" class="event-tick ${index === step ? 'active' : ''}" aria-label="Request ${index}"><span class="tick-icon">${index === 0 ? '⑂' : '•'}</span><span>${index}</span></button>`).join('')
     : history.map((item, index) => `<button type="button" data-step="${index}" class="event-tick ${index === step ? 'active' : ''}" aria-label="Step ${index + 1}: ${escapeHtml(item.events.at(-1)!.kind)}"><span class="tick-icon">${({ start: '●', fork: '⑂', cow_fault: '✦', write: '✎', exit: '×', reap: '↻', oom_kill: '!', mmap: '+', munmap: '−' } as Record<string, string>)[item.events.at(-1)!.kind] ?? '•'}</span><span>${escapeHtml(item.events.at(-1)!.kind.replace('_', ' '))}</span></button>`).join('');
-  root.querySelector('#terminal')!.textContent = event.terminal;
   root.querySelector('#narration')!.textContent = event.description;
-  root.querySelector('#scene-heading')!.textContent = event.kind.replace('_', ' ').toUpperCase();
-}
-
-function renderCode() {
-  const code = root.querySelector('#code')!;
-  if (moduleId === 'case') {
-    code.textContent = caseKind === 'decay'
-      ? `# Teaching model: finite preloaded catalog\npage = catalog[(request - 1) % ${CATALOG_PAGES}]\nwrite(page)  # first touch copies a shared page\n# Later writes reuse the worker's private frame.`
-      : `# Teaching model: retained allocation\nretained.append(new_page())\n# One more private mapped page remains after each request.`;
-    return;
-  }
-  if (moduleId === 2) {
-    const activeLine = walkStep <= 1 ? 0 : walkStep === 3 ? 2 : walkStep === 4 ? 3 : walkStep === 5 ? 6 : 5;
-    const lines = ['pid = os.fork()', 'if pid == 0:', "    print('child: fork returned 0')", '    os._exit(0)', 'else:', "    print(f'parent: child is {pid}')", '    os.waitpid(pid, 0)  # parent reaps child'];
-    code.innerHTML = lines.map((line, index) => `<span class="code-line ${walkStep >= 0 && index === activeLine ? 'code-active' : ''}">${escapeHtml(line)}</span>`).join('') + (walkStep >= 0 ? `<span class="code-caption">${escapeHtml(walkLabels[walkStep])}</span>` : '');
-    return;
-  }
-  code.textContent = moduleId === 4 ? `# Both processes begin with the same page mapping.\ncounter += 1  # 8-byte change, page-sized copy\n\n# Another process still sees its own value.` : `# Simplified process model\nmaster = Process(pid=4100)\nmaster.pages = [code, libs, heap, stack]\nmaster.fd[3] = listening_socket`;
 }
 
 function render() {
@@ -285,10 +267,11 @@ function render() {
       || selectedStructure.part === 'thread' && process.threadIds[selectedStructure.index] === undefined
       || selectedStructure.part === 'stack' && state.processes.length < 2) selectedStructure = null;
   }
-  renderNav(); renderLesson(); renderFlat(state); renderInspector(state); renderLedger(state); renderTimeline(state); renderCode();
+  renderChrome(); renderNav(); renderLesson(); renderFlat(state); renderInspector(state); renderLedger(state); renderTimeline(state);
   host.hidden = flat;
   (root.querySelector('#flat-host') as HTMLElement).hidden = !flat;
   root.querySelector('#view-toggle')!.textContent = flat ? '◈ 3D view' : '▦ Flat view';
+  root.querySelectorAll<HTMLButtonElement>('.camera-controls button').forEach(button => { button.disabled = flat; });
   scene?.setWorld(state, selectedPid, selectedPage, selectedFrame, selectedObjectId, selectedStructure, selection => { selectVisual(selection); });
   if (focused && !focused.isConnected && focusAttributes.length) {
     const replacement = [...root.querySelectorAll<HTMLElement>(focused.tagName.toLowerCase())].find(element => focusAttributes.every(([name, value]) => element.getAttribute(name!) === value));
@@ -349,27 +332,11 @@ function selectCase(kind: CaseKind, request: number) {
 
 root.addEventListener('click', event => {
   const target = event.target as HTMLElement;
-  if (target.closest('#import-progress')) { root.querySelector<HTMLInputElement>('#progress-file')!.click(); return; }
-  if (target.closest('#cancel-import')) { importAttempt++; pendingProgress = null; showImportReview(); importStatus('Import cancelled. Saved progress was not changed.'); root.querySelector<HTMLButtonElement>('#import-progress')!.focus(); return; }
-  if (target.closest('#apply-import') && pendingProgress) {
-    const imported = pendingProgress;
-    const keys = ['forkscape-progress', 'forkscape-exercises', 'forkscape-case'] as const;
-    const previous = keys.map(key => localStorage.getItem(key));
-    try {
-      localStorage.setItem(keys[0], JSON.stringify(imported.answers));
-      localStorage.setItem(keys[1], JSON.stringify(imported.exercises));
-      localStorage.setItem(keys[2], JSON.stringify(imported.caseStudy));
-    } catch {
-      keys.forEach((key, index) => { try { if (previous[index] === null) localStorage.removeItem(key); else localStorage.setItem(key, previous[index]!); } catch { /* Storage is unavailable. */ } });
-      importStatus('Could not save imported progress. Current progress was kept.');
-      return;
-    }
-    answers = imported.answers; exercise = imported.exercises; caseProgress = imported.caseStudy;
-    importAttempt++; pendingProgress = null; showImportReview(); render();
-    importStatus(`Progress imported. ${completedCount(imported)} of 5 activities complete.`);
-    root.querySelector<HTMLButtonElement>('#import-progress')!.focus();
-    return;
-  }
+  if (target.closest('#menu-toggle')) { menuOpen = !menuOpen; renderChrome(); return; }
+  const panelItem = target.closest<HTMLElement>('[data-panel]');
+  if (panelItem) { const id = panelItem.dataset.panel as PanelId; showPanel(openPanel === id ? null : id); return; }
+  if (target.closest('[data-close-panel]')) { showPanel(null); return; }
+  if (menuOpen && !target.closest('.menu-dock')) { menuOpen = false; renderChrome(); }
   const camera = target.closest<HTMLElement>('[data-camera]');
   if (camera) { scene?.setCameraPreset(camera.dataset.camera as 'overview' | 'process' | 'memory'); return; }
   const zoom = target.closest<HTMLElement>('[data-zoom]');
@@ -444,28 +411,11 @@ root.addEventListener('click', event => {
     if (action === 'unlimit') { runAction({ type: 'set_limit', bytes: null }); return; }
   }
   if (target.closest('#view-toggle')) { flat = !flat; localStorage.setItem('forkscape-flat', String(flat)); render(); }
-  if (target.closest('#export-progress')) {
-    const blob = new Blob([JSON.stringify({ version: 3, answers, exercises: exercise, caseStudy: caseProgress }, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob), link = document.createElement('a');
-    link.href = url; link.download = 'forkscape-progress.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
 });
-root.addEventListener('change', async event => {
-  const input = event.target as HTMLInputElement;
-  if (input.id !== 'progress-file') return;
-  const file = input.files?.[0];
-  input.value = '';
-  if (!file) return;
-  const attempt = ++importAttempt;
-  pendingProgress = null; showImportReview();
-  if (file.size > MAX_PROGRESS_BYTES) { importStatus('Progress file is larger than 64 KiB.'); return; }
-  try {
-    const parsed = parseProgress(await file.text());
-    if (attempt !== importAttempt) return;
-    pendingProgress = parsed;
-    showImportReview(); importStatus('Review the imported progress before replacing saved progress.');
-    root.querySelector<HTMLButtonElement>('#apply-import')!.focus();
-  } catch (error) { if (attempt === importAttempt) importStatus(error instanceof Error ? error.message : 'Could not read progress file.'); }
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  if (menuOpen) { menuOpen = false; renderChrome(); root.querySelector<HTMLElement>('#menu-toggle')!.focus(); }
+  else if (openPanel) showPanel(null);
 });
 root.addEventListener('input', event => {
   const input = event.target as HTMLInputElement;

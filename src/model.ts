@@ -11,7 +11,7 @@ export interface ProcessState {
   threadIds: number[]; locks: LockState[]; counter: number; nextPage: number;
 }
 export interface FrameState { id: number; region: string; kind: RegionKind; owner: number | null; revision: number; fileKey?: string }
-export interface WorldEvent { kind: EventKind; source: Source; step: number; pid: number; frameId?: number; newFrameId?: number; description: string; terminal: string }
+export interface WorldEvent { kind: EventKind; source: Source; step: number; pid: number; frameId?: number; newFrameId?: number; description: string }
 export interface WorldState {
   source: Source; pageSize: number; processes: ProcessState[]; frames: FrameState[]; kernelObjects: KernelObjectState[];
   events: WorldEvent[]; nextPid: number; nextTid: number; nextFrameId: number; nextRegionId: number; nextObjectId: number;
@@ -48,8 +48,7 @@ export function initialWorld(): WorldState {
     }))),
     kernelObjects: [{ id: 'listen:8000', kind: 'socket', offset: 0 }],
     events: [{ kind: 'start', source: 'model', step: 0, pid: 4100,
-      description: 'The master has six mapped pages, a listening socket descriptor, and one thread.',
-      terminal: '$ ps -o pid,ppid,rss,cmd --forest\n  PID  PPID   RSS CMD\n 4100     1    24K gunicorn: master' }],
+      description: 'The master has six mapped pages, a listening socket descriptor, and one thread.' }],
   };
 }
 
@@ -102,8 +101,7 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     world.processes.push({ ...parent, pid, parentPid: parent.pid, role: 'worker', pages: [...parent.pages],
       regions: parent.regions.map(r => ({ ...r })), descriptors: parent.descriptors.map(fd => ({ ...fd })),
       threadIds: [pid], locks: parent.locks.map(lock => ({ ...lock })) });
-    add({ kind: 'fork', pid, description: `PID ${pid} forks from ${parent.pid}. Data frames and kernel objects remain shared; only the calling thread survives.`,
-      terminal: `$ ps -o pid,ppid,rss,cmd --forest\n  PID  PPID   RSS CMD\n ${parent.pid}     1    ${parent.pages.filter(id => id !== null).length * 4}K gunicorn: master\n ${pid}  ${parent.pid}    ${parent.pages.filter(id => id !== null).length * 4}K  \\_ gunicorn: worker\n# parent fork() → ${pid}; child fork() → 0` });
+    add({ kind: 'fork', pid, description: `PID ${pid} forks from ${parent.pid}. Data frames and kernel objects remain shared; only the calling thread survives.` });
   } else if (action.type === 'read' || action.type === 'write') {
     const process = running(action.pid), page = action.page ?? 2, oldId = process.pages[page];
     if (oldId === null || oldId === undefined) throw Error(`Page ${page} is not mapped by PID ${action.pid}`);
@@ -113,7 +111,7 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     const frame = world.frames.find(item => item.id === oldId);
     if (!frame) throw Error(`Missing frame ${oldId}`);
     if (action.type === 'read') {
-      add({ kind: 'read', pid: process.pid, frameId: oldId, description: `PID ${process.pid} reads virtual page ${page}; its mapping and frame are unchanged.`, terminal: `# model: PID ${process.pid} reads page ${page} → frame ${oldId}` });
+      add({ kind: 'read', pid: process.pid, frameId: oldId, description: `PID ${process.pid} reads virtual page ${page}; its mapping and frame are unchanged.` });
     } else if (region.sharing === 'private' && (frame.kind === 'file' || sharers(world, oldId) > 1)) {
       const newId = world.nextFrameId++;
       world.frames.push({ id: newId, region: region.name, kind: 'anonymous', owner: process.pid, revision: frame.revision + 1 });
@@ -121,14 +119,12 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
       if (page === 2) process.counter++;
       releaseUnused(world);
       add({ kind: 'cow_fault', pid: process.pid, frameId: oldId, newFrameId: newId,
-        description: `PID ${process.pid} writes 8 bytes to private page ${page}. One ${world.pageSize / 1024} KiB page is copied.`,
-        terminal: `$ cat /proc/${process.pid}/smaps_rollup\nPrivate_Dirty:        4 kB\n# model: page ${page} now maps frame ${newId}` });
+        description: `PID ${process.pid} writes 8 bytes to private page ${page}. One ${world.pageSize / 1024} KiB page is copied.` });
     } else {
       if (page === 2) process.counter++;
       frame.revision++;
       add({ kind: 'write', pid: process.pid, frameId: oldId,
-        description: region.sharing === 'shared' ? `PID ${process.pid} writes shared page ${page}; other mappers see the change.` : `PID ${process.pid} writes exclusive page ${page}; its frame is reused.`,
-        terminal: `# model: page ${page} remains on frame ${oldId}; no new frame` });
+        description: region.sharing === 'shared' ? `PID ${process.pid} writes shared page ${page}; other mappers see the change.` : `PID ${process.pid} writes exclusive page ${page}; its frame is reused.` });
     }
   } else if (action.type === 'mmap') {
     const process = running(action.pid);
@@ -149,20 +145,20 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
       }
       process.pages[startPage + offset] = frame.id;
     }
-    add({ kind: 'mmap', pid: process.pid, description: `PID ${process.pid} maps ${action.pageCount} ${action.kind} page${action.pageCount === 1 ? '' : 's'} as ${action.name}.`, terminal: `# model: mmap → region ${id}, virtual pages ${startPage}–${process.nextPage - 1}` });
+    add({ kind: 'mmap', pid: process.pid, description: `PID ${process.pid} maps ${action.pageCount} ${action.kind} page${action.pageCount === 1 ? '' : 's'} as ${action.name}.` });
   } else if (action.type === 'munmap') {
     const process = running(action.pid), region = process.regions.find(r => r.id === action.regionId);
     if (!region) throw Error(`Region ${action.regionId} is not mapped by PID ${process.pid}`);
     for (let page = region.startPage; page < region.startPage + region.pageCount; page++) process.pages[page] = null;
     process.regions = process.regions.filter(r => r.id !== region.id);
     releaseUnused(world);
-    add({ kind: 'munmap', pid: process.pid, description: `PID ${process.pid} unmaps ${region.name}; unreferenced frames are released.`, terminal: `# model: munmap region ${region.id}` });
+    add({ kind: 'munmap', pid: process.pid, description: `PID ${process.pid} unmaps ${region.name}; unreferenced frames are released.` });
   } else if (action.type === 'open_file') {
     const process = running(action.pid), objectId = `file-${world.nextObjectId++}`;
     const fd = Math.max(2, ...process.descriptors.map(item => item.fd)) + 1;
     world.kernelObjects.push({ id: objectId, kind: 'file', offset: 0 });
     process.descriptors.push({ fd, objectId });
-    add({ kind: 'open', pid: process.pid, description: `PID ${process.pid} opens ${action.name} on fd ${fd}; the open-file object starts at offset 0.`, terminal: `# model: open('${action.name}') → fd ${fd}` });
+    add({ kind: 'open', pid: process.pid, description: `PID ${process.pid} opens ${action.name} on fd ${fd}; the open-file object starts at offset 0.` });
   } else if (action.type === 'read_file') {
     const process = running(action.pid), descriptor = process.descriptors.find(fd => fd.fd === action.fd);
     if (!descriptor) throw Error(`FD ${action.fd} is not open in PID ${process.pid}`);
@@ -170,17 +166,17 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     if (!object || object.kind !== 'file') throw Error(`FD ${action.fd} is not a file`);
     if (!Number.isSafeInteger(action.bytes) || action.bytes < 0) throw Error('Read size must be a non-negative integer');
     const before = object.offset; object.offset += action.bytes;
-    add({ kind: 'file_read', pid: process.pid, description: `PID ${process.pid} reads ${action.bytes} bytes on fd ${action.fd}; shared file offset moves from ${before} to ${object.offset}.`, terminal: `# model: read(${action.fd}, ${action.bytes}) → offset ${object.offset}` });
+    add({ kind: 'file_read', pid: process.pid, description: `PID ${process.pid} reads ${action.bytes} bytes on fd ${action.fd}; shared file offset moves from ${before} to ${object.offset}.` });
   } else if (action.type === 'close_fd') {
     const process = running(action.pid), descriptor = process.descriptors.find(fd => fd.fd === action.fd);
     if (!descriptor) throw Error(`FD ${action.fd} is not open in PID ${process.pid}`);
     process.descriptors = process.descriptors.filter(fd => fd !== descriptor);
     releaseUnused(world);
-    add({ kind: 'close', pid: process.pid, description: `PID ${process.pid} closes fd ${action.fd}. Other inherited descriptors still refer to the same object.`, terminal: `# model: close(${action.fd})` });
+    add({ kind: 'close', pid: process.pid, description: `PID ${process.pid} closes fd ${action.fd}. Other inherited descriptors still refer to the same object.` });
   } else if (action.type === 'spawn_thread') {
     const process = running(action.pid), tid = world.nextTid++;
     process.threadIds.push(tid);
-    add({ kind: 'thread', pid: process.pid, description: `PID ${process.pid} starts thread ${tid}.`, terminal: `# model: /proc/${process.pid}/task now has ${process.threadIds.length} entries` });
+    add({ kind: 'thread', pid: process.pid, description: `PID ${process.pid} starts thread ${tid}.` });
   } else if (action.type === 'lock' || action.type === 'unlock') {
     const process = running(action.pid);
     if (!process.threadIds.includes(action.tid)) throw Error(`Thread ${action.tid} is not in PID ${process.pid}`);
@@ -193,27 +189,27 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
       if (lock.ownerTid !== action.tid) throw Error(`Thread ${action.tid} does not own lock ${lock.id}`);
       lock.ownerTid = null;
     }
-    add({ kind: action.type, pid: process.pid, description: `Thread ${action.tid} ${action.type === 'lock' ? 'takes' : 'releases'} lock ${action.lockId}.`, terminal: `# model: lock ${action.lockId} owner ${lock.ownerTid ?? 'none'}` });
+    add({ kind: action.type, pid: process.pid, description: `Thread ${action.tid} ${action.type === 'lock' ? 'takes' : 'releases'} lock ${action.lockId}.` });
   } else if (action.type === 'set_limit') {
     if (action.bytes !== null && (!Number.isSafeInteger(action.bytes) || action.bytes < 0)) throw Error('Limit must be a non-negative integer or null');
     world.limitBytes = action.bytes;
-    add({ kind: 'limit', pid: 0, description: action.bytes === null ? 'Model memory limit removed.' : `Model memory limit set to ${action.bytes} bytes, including page tables.`, terminal: `# model: memory.max = ${action.bytes ?? 'max'}` });
+    add({ kind: 'limit', pid: 0, description: action.bytes === null ? 'Model memory limit removed.' : `Model memory limit set to ${action.bytes} bytes, including page tables.` });
   } else if (action.type === 'exit') {
     const process = running(action.pid);
     stopProcess(world, process);
-    add({ kind: 'exit', pid: process.pid, description: `PID ${process.pid} exits. Its mappings and descriptors are released; a zombie waits to be reaped.`, terminal: `$ ps -o pid,ppid,stat,cmd\n ${process.pid}  ${process.parentPid ?? 1} Z    [gunicorn] <defunct>` });
+    add({ kind: 'exit', pid: process.pid, description: `PID ${process.pid} exits. Its mappings and descriptors are released; a zombie waits to be reaped.` });
   } else {
     const process = world.processes.find(p => p.pid === action.pid);
     if (!process || process.status !== 'zombie') throw Error(`PID ${action.pid} is not a zombie`);
     world.processes = world.processes.filter(p => p.pid !== action.pid);
-    add({ kind: 'reap', pid: action.pid, description: `The parent calls waitpid() and reaps PID ${action.pid}.`, terminal: `$ ps -o pid,ppid,stat,cmd\n# PID ${action.pid} no longer appears` });
+    add({ kind: 'reap', pid: action.pid, description: `The parent calls waitpid() and reaps PID ${action.pid}.` });
   }
   while (world.limitBytes !== null && chargedBytes(world) > world.limitBytes) {
     const victim = world.processes.filter(p => p.status === 'running').sort((a, b) =>
       b.pages.filter(id => id !== null).length - a.pages.filter(id => id !== null).length || b.pid - a.pid)[0];
     if (!victim) throw Error('Memory limit cannot be satisfied');
     stopProcess(world, victim);
-    add({ kind: 'oom_kill', pid: victim.pid, description: `Model memory limit exceeded. PID ${victim.pid} is selected as the OOM victim.`, terminal: `# model: memory.current exceeded memory.max; killed PID ${victim.pid}` });
+    add({ kind: 'oom_kill', pid: victim.pid, description: `Model memory limit exceeded. PID ${victim.pid} is selected as the OOM victim.` });
   }
   return world;
 }
