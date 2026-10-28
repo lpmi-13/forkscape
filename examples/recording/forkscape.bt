@@ -1,0 +1,252 @@
+// Kernel events for one process tree, which bpftrace_tracer.py starts, syncs with, and turns into a Forkscape recording.
+//   $1  the PID that will exec the recorded command; it and its descendants are traced from that exec. 0 with $3 instead.
+//   $2  the tracer's own PID, which calls getppid() until the S line shows that every probe is attached
+//   $3  with $1 = 0, a container's hostname: tracing starts at the first exec in a task with that hostname, the container's
+//       entrypoint, and follows its descendants
+// Each line is a tab-separated record. The first field says what it is; the second is the CLOCK_MONOTONIC time in ns.
+// Records arrive in per-CPU batches, so the tracer sorts them by time. PIDs are the host's; NS lines give each traced task's
+// PID in its own namespace, which is the PID a containerized process sees and writes in its markers.
+// Written for bpftrace 0.20 and Linux 6.1 on x86-64; tested with bpftrace 0.25 too. The tracer swaps the fault-around probe for
+// set_pte_range on kernels that have it instead of do_set_pte (6.6 and later), and leaves out any other kfunc probe the kernel cannot trace.
+
+// exec: B when it begins (the kernel maps the new program before X), BF if it fails, X once the new image runs.
+tracepoint:syscalls:sys_enter_execve, tracepoint:syscalls:sys_enter_execveat
+/pid == $1 || @t[pid] || ($1 == 0 && @started == 0 && curtask->nsproxy->uts_ns->name.nodename == str($3))/
+{
+  @t[pid] = 1;
+  @started = 1;
+  printf("B\t%llu\t%d\n", nsecs, pid);
+}
+tracepoint:syscalls:sys_exit_execve, tracepoint:syscalls:sys_exit_execveat
+/@t[pid] && args->ret < 0/
+{
+  printf("BF\t%llu\t%d\t%d\n", nsecs, pid, args->ret);
+}
+tracepoint:sched:sched_process_exec
+/@t[pid]/
+{
+  $mm = curtask->mm;
+  @brk[pid] = $mm->brk;
+  printf("X\t%llu\t%d\t%d\t%lx\t%lx\t%lx\t%lx\t%s\n", nsecs, pid, curtask->real_parent->tgid, $mm->start_stack, $mm->env_end, $mm->brk, $mm->context.vdso, comm);
+  // The PID in the task's own namespace: pid->numbers[pid->level].nr, where each struct upid is 16 bytes.
+  $p = curtask->thread_pid;
+  printf("NS\t%llu\t%d\t%d\n", nsecs, pid, *(int32 *)((uint64)$p + offsetof(struct pid, numbers) + (uint64)$p->level * 16));
+}
+
+// fork and threads. CLONE_THREAD is 0x10000; CLONE_VM without it is vfork or posix_spawn.
+tracepoint:task:task_newtask
+/@t[pid]/
+{
+  if (args->clone_flags & 0x10000) {
+    printf("T\t%llu\t%d\t%d\t%d\n", nsecs, pid, tid, args->pid);
+  } else {
+    @t[args->pid] = 1;
+    printf("F\t%llu\t%d\t%d\t%d\t%lx\n", nsecs, pid, tid, args->pid, args->clone_flags);
+  }
+}
+// Each new task's PID in its own namespace, for processes and threads alike.
+kfunc:wake_up_new_task
+/@t[args->p->tgid]/
+{
+  $p = args->p->thread_pid;
+  printf("NS\t%llu\t%d\t%d\n", nsecs, args->p->pid, *(int32 *)((uint64)$p + offsetof(struct pid, numbers) + (uint64)$p->level * 16));
+}
+tracepoint:task:task_rename
+/@t[pid] && args->pid == (int32)pid/
+{
+  printf("N\t%llu\t%d\t%s\n", nsecs, pid, args->newcomm);
+}
+
+// A process exits when its last thread does. Its memory is already released (exit_mm runs before this tracepoint).
+tracepoint:sched:sched_process_exit
+/@t[pid] && curtask->signal->live.counter == 0/
+{
+  printf("E\t%llu\t%d\t%d\n", nsecs, pid, curtask->exit_code);
+  delete(@t[pid]);
+  delete(@brk[pid]);
+  @z[pid] = 1;
+}
+tracepoint:oom:mark_victim
+/@t[args->pid]/
+{
+  printf("O\t%llu\t%d\n", nsecs, args->pid);
+}
+// The zombie is released, usually by the parent's wait.
+kfunc:release_task
+/@z[args->p->tgid] && args->p->pid == args->p->tgid/
+{
+  printf("R\t%llu\t%d\t%d\n", nsecs, pid, args->p->tgid);
+  delete(@z[args->p->tgid]);
+}
+
+// Mappings. mmap_region covers mmap(2) and the kernel's own mappings at exec, after do_mmap chose the address.
+kretfunc:mmap_region
+/@t[pid] && (int64)retval > 0/
+{
+  $f = args->file;
+  if ($f != 0) {
+    printf("M\t%llu\t%d\t%lx\t%lu\t%lx\t%lu\t%u\t%lu\t%s\n", nsecs, pid, retval, args->len, args->vm_flags, args->pgoff, $f->f_inode->i_sb->s_dev, $f->f_inode->i_ino, str($f->f_path.dentry->d_name.name));
+  } else {
+    printf("M\t%llu\t%d\t%lx\t%lu\t%lx\t0\t0\t0\t\n", nsecs, pid, retval, args->len, args->vm_flags);
+  }
+}
+// brk growth, and the bss the ELF loader adds at exec.
+kfunc:do_brk_flags
+/@t[pid]/
+{
+  printf("H\t%llu\t%d\t%lx\t%lu\n", nsecs, pid, args->addr, args->len);
+}
+// Every move of the program break. The tracer takes shrinks from here, and growth too if do_brk_flags cannot be traced.
+tracepoint:syscalls:sys_exit_brk
+/@t[pid] && (uint64)args->ret != @brk[pid]/
+{
+  printf("HB\t%llu\t%d\t%lx\t%lx\n", nsecs, pid, @brk[pid], (uint64)args->ret);
+  @brk[pid] = (uint64)args->ret;
+}
+tracepoint:syscalls:sys_enter_munmap
+/@t[pid]/
+{
+  @ua[tid] = args->addr;
+  @ul[tid] = args->len;
+}
+tracepoint:syscalls:sys_exit_munmap
+/@t[pid] && @ul[tid]/
+{
+  if (args->ret == 0) {
+    printf("Z\t%llu\t%d\t%lx\t%lu\n", nsecs, pid, @ua[tid], @ul[tid]);
+  }
+  delete(@ua[tid]);
+  delete(@ul[tid]);
+}
+// MADV_DONTNEED (4), MADV_FREE (8), and MADV_REMOVE (9) drop resident pages.
+tracepoint:syscalls:sys_enter_madvise
+/@t[pid] && (args->behavior == 4 || args->behavior == 8 || args->behavior == 9)/
+{
+  @va[tid] = args->start;
+  @vl[tid] = args->len_in;
+  @vb[tid] = args->behavior;
+}
+tracepoint:syscalls:sys_exit_madvise
+/@t[pid] && @vl[tid]/
+{
+  if (args->ret == 0) {
+    printf("V\t%llu\t%d\t%lx\t%lu\t%d\n", nsecs, pid, @va[tid], @vl[tid], @vb[tid]);
+  }
+  delete(@va[tid]);
+  delete(@vl[tid]);
+  delete(@vb[tid]);
+}
+tracepoint:syscalls:sys_enter_mremap
+/@t[pid]/
+{
+  @qa[tid] = args->addr;
+  @qo[tid] = args->old_len;
+  @qn[tid] = args->new_len;
+}
+tracepoint:syscalls:sys_exit_mremap
+/@t[pid] && @qn[tid]/
+{
+  if (args->ret > 0) {
+    printf("Q\t%llu\t%d\t%lx\t%lu\t%lu\t%lx\n", nsecs, pid, @qa[tid], @qo[tid], @qn[tid], args->ret);
+  }
+  delete(@qa[tid]);
+  delete(@qo[tid]);
+  delete(@qn[tid]);
+}
+
+// Page faults: from user mode, and from the kernel touching user memory, as read() into a fresh buffer does.
+// error_code bit 1 is a write.
+tracepoint:exceptions:page_fault_user
+/@t[pid]/
+{
+  printf("U\t%llu\t%d\t%lx\t%lx\n", nsecs, pid, args->address, args->error_code);
+}
+tracepoint:exceptions:page_fault_kernel
+/@t[pid] && args->address < 0x800000000000/
+{
+  printf("K\t%llu\t%d\t%lx\t%lx\n", nsecs, pid, args->address, args->error_code);
+}
+// Fault-around: a read fault on a file maps neighbouring pages already in the page cache, without faults of their own.
+// Each line is one mapped page and the faulting page; the tracer drops the faulting page itself.
+kfunc:do_set_pte
+/@t[pid] && args->addr != args->vmf->address/
+{
+  printf("A\t%llu\t%d\t%lx\t1\t%lx\n", nsecs, pid, args->addr, args->vmf->address);
+}
+
+// Descriptors. Every new descriptor (open, socket, accept, pipe, eventfd, ...) passes through fd_install.
+kfunc:fd_install
+/@t[pid]/
+{
+  $f = args->file;
+  $mode = $f->f_inode->i_mode & 0xf000;
+  if ($mode == 0xc000) {
+    $sk = ((struct socket *)$f->private_data)->sk;
+    printf("I\t%llu\t%d\t%u\t%lx\t%u\t%lu\t%x\tsocket\t%d\t%d\t%d\n", nsecs, pid, args->fd, $f, $f->f_inode->i_sb->s_dev, $f->f_inode->i_ino, $mode, $sk->__sk_common.skc_family, $sk->__sk_common.skc_state, $sk->__sk_common.skc_num);
+  } else {
+    printf("I\t%llu\t%d\t%u\t%lx\t%u\t%lu\t%x\t%s\n", nsecs, pid, args->fd, $f, $f->f_inode->i_sb->s_dev, $f->f_inode->i_ino, $mode, str($f->f_path.dentry->d_name.name));
+  }
+}
+// The full path of each file a traced process opens, including the program and libraries exec opens.
+kfunc:security_file_open
+/@t[pid]/
+{
+  printf("P\t%llu\t%u\t%lu\t%s\n", nsecs, args->file->f_inode->i_sb->s_dev, args->file->f_inode->i_ino, path(args->file->f_path));
+}
+kfunc:inet_listen
+/@t[pid]/
+{
+  printf("L\t%llu\t%d\t%lx\t%d\n", nsecs, pid, args->sock->file, args->sock->sk->__sk_common.skc_num);
+}
+tracepoint:syscalls:sys_enter_close
+/@t[pid]/
+{
+  @cf[tid] = args->fd + 1;
+}
+tracepoint:syscalls:sys_exit_close
+/@t[pid] && @cf[tid]/
+{
+  if (args->ret == 0) {
+    printf("C\t%llu\t%d\t%d\n", nsecs, pid, @cf[tid] - 1);
+  }
+  delete(@cf[tid]);
+}
+tracepoint:syscalls:sys_enter_dup2, tracepoint:syscalls:sys_enter_dup3
+/@t[pid]/
+{
+  @df[tid] = args->oldfd + 1;
+}
+tracepoint:syscalls:sys_exit_dup2, tracepoint:syscalls:sys_exit_dup3
+/@t[pid] && @df[tid]/
+{
+  if (args->ret >= 0) {
+    printf("D\t%llu\t%d\t%d\t%d\n", nsecs, pid, @df[tid] - 1, args->ret);
+  }
+  delete(@df[tid]);
+}
+tracepoint:syscalls:sys_enter_dup
+/@t[pid]/
+{
+  @df[tid] = args->fildes + 1;
+}
+tracepoint:syscalls:sys_exit_dup
+/@t[pid] && @df[tid]/
+{
+  if (args->ret >= 0) {
+    printf("D\t%llu\t%d\t%d\t%d\n", nsecs, pid, @df[tid] - 1, args->ret);
+  }
+  delete(@df[tid]);
+}
+
+// Attached: the tracer calls getppid() until it sees this line, then lets the command exec or the container start.
+tracepoint:syscalls:sys_enter_getppid
+/pid == $2/
+{
+  printf("S\t%llu\n", nsecs);
+}
+
+END
+{
+  clear(@t); clear(@z); clear(@started); clear(@brk); clear(@ua); clear(@ul); clear(@va); clear(@vl); clear(@vb);
+  clear(@qa); clear(@qo); clear(@qn); clear(@cf); clear(@df);
+}

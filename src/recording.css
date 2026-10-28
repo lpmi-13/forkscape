@@ -1,0 +1,87 @@
+/* Recorded telemetry. Recorded data takes an ice blue, as the problem takes pink and the fix teal: the stepper's frame says which kind of run is playing. */
+:root{--recorded:#93dfff;--recorded-ink:#13283a;--recorded-deep:#2b5d78}
+
+/* The picker: a large target to click, which also says a file can be dropped. */
+.recording-drop{display:grid;gap:4px;justify-items:center;margin:4px 0 12px;padding:22px 16px;border:2px dashed #6aa9c9;border-radius:7px;background:#1e2a4b;text-align:center;cursor:pointer}
+.recording-drop strong{color:#e3f6ff;font-size:var(--text-lg);font-weight:600}
+.recording-drop span{color:#b9c5d3;font-size:var(--text-sm)}
+.recording-drop:hover{border-color:var(--recorded);background:#243358}
+.recording-drop:focus-within{outline:3px solid #ffe078;outline-offset:2px}
+.recording-drop.is-another{justify-items:start;margin:0 0 10px;padding:12px 14px;text-align:left}
+.recording-drop.is-another strong{font-size:var(--text-md)}
+.recording-loader-top{display:flex;align-items:start;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+.recording-loader-top .recording-drop{flex:1 1 12rem;margin:0}
+.recording-loader-top #close-recording{flex:none;margin:0}
+.recording-loader-top .recording-status{flex-basis:100%;margin:0}
+.recording-status{margin:0 0 12px;padding:8px 10px;border-radius:4px;font-size:var(--text-sm);line-height:1.5}
+.recording-status.is-info{color:#d8eef8;background:#223a52}
+.recording-status.is-error{color:#ffd9cf;background:#4a2338;border-left:3px solid #ff9a8a}
+.sample-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.recording-format{margin:0 0 8px;color:#d6d9e5;font-size:var(--text-sm);line-height:1.55}
+.recording-format summary{padding:4px 0;cursor:pointer;color:#ffe09e;font-size:var(--text-md)}
+.recording-format p{margin:10px 0}
+.recording-format ul{margin:8px 0;padding-left:18px;display:grid;gap:5px}
+.recording-format code,.recording-format pre{color:#a1efc9;font:var(--text-sm)/1.5 'DM Mono',monospace}
+.recording-format pre{margin:0;padding:8px 10px;overflow-x:auto;border:1px solid #4a4670;border-radius:4px;background:#161a35;white-space:pre-wrap;word-break:break-all}
+
+.recording-source{margin:0 0 18px;padding-left:12px;border-left:3px solid var(--recorded);color:#d8eef8;font-size:var(--text-md);line-height:1.45;overflow-wrap:anywhere}
+
+/* The phase rail: the recording's chapters as one chunky bar, each segment as wide as its share of the stages.
+   It is the overview and the way to jump; the stepper below moves one stage at a time. */
+.phase-rail{margin:0 0 12px}
+.phase-track{display:flex;gap:3px;padding:3px;border:2px solid #4f7f9c;border-radius:5px;background:#161a35;box-shadow:3px 3px 0 #151731}
+.phase-segment{position:relative;flex:1 1 auto;min-width:1.75rem;min-height:2.25rem;padding:4px 6px;border:0;border-radius:2px;background:#2e3158;color:#d8eef8;font-size:var(--text-sm);font-weight:600;text-align:left;overflow:hidden}
+.phase-segment span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.phase-segment:hover:not(:disabled){transform:none;background:#3e4778}
+.phase-segment:focus-visible{outline-offset:-3px}
+.phase-segment.is-current{background:var(--recorded);color:var(--recorded-ink)}
+.phase-segment.is-current:hover{background:#b5eaff}
+/* A notch where the current stage falls within its phase. */
+.phase-segment.is-current::after{content:'';position:absolute;bottom:0;left:var(--at,50%);width:8px;height:5px;margin-left:-4px;background:var(--recorded-ink);clip-path:polygon(50% 0,100% 100%,0 100%)}
+.phase-now{margin:8px 0 0;overflow:hidden;color:#b9c5d3;font-size:var(--text-sm);text-overflow:ellipsis;white-space:nowrap}
+.phase-now strong{color:#e3f6ff;font-weight:600}
+
+.stepper.is-recording{border-color:var(--recorded)}
+.step-phase{margin:12px 0 0;color:var(--recorded);font:var(--text-md) 'Silkscreen',monospace;text-transform:uppercase}
+.stepper.is-recording .step-caption{margin-top:6px}
+.stepper.is-recording .step-caption{overflow-wrap:anywhere}
+.stepper.is-recording .step-slides.is-single{min-height:12rem}
+@media(min-width:900px){.stepper.is-recording .step-slides.is-single{height:17rem;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:6px}}
+
+/* A dashed line is figured from the recording's events; a solid one was measured. Both keep their metric's colour. */
+.chart-line.line-dashed{stroke-dasharray:6 4}
+.chart-line.line-dotted{stroke-dasharray:1.5 4;stroke-width:2.5}
+.line-key.line-dashed{background:repeating-linear-gradient(90deg,var(--series) 0 6px,transparent 6px 9px)}
+.line-key.line-dotted{background:repeating-linear-gradient(90deg,var(--series) 0 2px,transparent 2px 5px)}
+
+.stage-events{margin-top:16px;padding:10px 12px;border:1px solid #4a4670;border-radius:6px;background:#1b1f3e}
+.stage-events summary{padding:4px 0;cursor:pointer;color:#ffe09e;font-size:var(--text-sm)}
+.stage-events-scroll{max-height:18rem;margin-top:8px;overflow:auto}
+.stage-events table{width:100%;border-collapse:collapse;font:var(--text-xs)/1.45 'DM Mono',monospace}
+.stage-events th{position:sticky;top:0;padding:4px 6px;background:#232750;color:#b9c5d3;text-align:left;font:600 var(--text-sm) 'Fredoka',sans-serif}
+.stage-events td{padding:3px 6px;border-bottom:1px solid #2f3360;color:#e5dfe8;vertical-align:top}
+.stage-events td:first-child,.stage-events td:nth-child(2){white-space:nowrap;color:#b9c5d3}
+.stage-events td:last-child{word-break:break-all}
+.stage-events-more{margin:6px 0 0;color:#b9c5d3;font-size:var(--text-sm)}
+
+.replay-notes ul{margin:8px 0 0;padding-left:18px;display:grid;gap:6px;color:#e5dfe8;font-size:var(--text-sm);line-height:1.5;overflow-wrap:anywhere}
+.tile-label{margin:8px 0 6px!important;color:#d6d9e5!important;font-size:var(--text-sm)!important}
+.tile-toggle{grid-template-columns:repeat(3,1fr);max-width:15rem;margin:0 0 6px}
+.tile-toggle [aria-pressed="true"],.tile-toggle [aria-pressed="true"]:hover:not(:disabled){background:var(--recorded);color:var(--recorded-ink)}
+.recording-facts{display:grid;gap:6px;margin:18px 0 0;font-size:var(--text-sm)}
+.recording-facts div{display:grid;grid-template-columns:6rem 1fr;gap:8px}
+.recording-facts div.is-long{display:block}
+.recording-facts dt{color:#b9c5d3}
+.recording-facts dd{margin:0;color:#e5dfe8;line-height:1.5;overflow-wrap:anywhere}
+.recording-facts .is-long dd{margin-top:3px}
+
+/* Dragging a file over the page shows where it will go: anywhere. */
+.drop-veil{position:fixed;inset:10px;z-index:60;display:grid;place-items:center;border:3px dashed var(--recorded);border-radius:10px;background:#10152dd9;pointer-events:none}
+.drop-veil p{margin:0;padding:14px 20px;border:2px solid var(--recorded);border-radius:6px;background:#22304f;color:#e3f6ff;font:600 var(--text-xl) 'Fredoka',sans-serif;box-shadow:4px 4px 0 #151731}
+
+@media(max-width:899px){
+  .stepper.is-recording{border-top-color:var(--recorded)}
+  .stepper.is-recording .step-phase{margin:0 0 4px;font-size:var(--text-md)}
+  .stepper.is-recording .step-caption{margin-top:0;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+  .lesson-rail.sheet-expanded .stepper.is-recording .step-caption{display:block}
+}

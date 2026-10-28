@@ -1,0 +1,392 @@
+import assert from 'node:assert/strict';
+import { PerspectiveCamera, Vector3 } from 'three';
+import { chromium } from 'playwright-core';
+import { createServer } from 'vite';
+
+const server = await createServer({ server: { host: '127.0.0.1', port: 0 } });
+await server.listen();
+const address = server.httpServer.address();
+assert.ok(address && typeof address !== 'string');
+const url = `http://127.0.0.1:${address.port}/`;
+const { stageView } = await server.ssrLoadModule('/src/scene.ts');
+const scenarioIds = ['cow-decay', 'leak', 'decay-oom', 'rss-overcount', 'worker-warmup', 'no-preload', 'shared-offset', 'thread-lock'];
+let browser;
+
+async function clickScenePoint(page, x, y, z) {
+  const canvas = page.locator('#scene-host canvas');
+  const bounds = await canvas.boundingBox();
+  assert.ok(bounds, '3D canvas must be visible');
+  // The scene frames itself with stageView, so a target is found from the same camera.
+  const coveredTop = await page.locator('#scene-host').evaluate(host => parseFloat(getComputedStyle(host).getPropertyValue('--covered-top')) || 0);
+  const view = stageView(bounds.width, bounds.height, coveredTop);
+  const camera = new PerspectiveCamera(view.fov, bounds.width / bounds.height, 0.1, 100);
+  camera.position.set(view.position.x, view.position.y, view.position.z);
+  camera.lookAt(view.target.x, view.target.y, view.target.z);
+  camera.updateMatrixWorld();
+  const point = new Vector3(x, y, z).project(camera);
+  assert.ok(Math.abs(point.x) < 1 && Math.abs(point.y) < 1, 'scene target must be in view');
+  await canvas.click({ position: { x: (point.x + 1) * bounds.width / 2, y: (1 - point.y) * bounds.height / 2 } });
+}
+
+async function openPanel(page, id) {
+  if (!await page.locator(`[data-panel-id="${id}"]`).isVisible()) {
+    await page.locator('#menu-toggle').click();
+    await page.locator(`[data-panel="${id}"]`).click();
+  }
+  assert.equal(await page.locator('#panel-menu').isVisible(), false, 'choosing a panel collapses the menu');
+  assert.equal(await page.locator('[data-panel-id]:visible').count(), 1, 'only one panel is open');
+}
+
+// In free exploration and replay, the menu item for the current mode reopens its panel; Scenarios goes back to the library.
+async function openModePanel(page, mode) {
+  if (!await page.locator('[data-panel-id="scenarios"]').isVisible()) {
+    await page.locator('#menu-toggle').click();
+    await page.locator(`[data-mode="${mode}"]`).click();
+  }
+  assert.equal(await page.locator('[data-panel-id="scenarios"]').isVisible(), true, 'the current mode’s menu item reopens its panel');
+}
+
+async function assertLabelsSeparate(page) {
+  const hits = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const boxes = [...document.querySelectorAll('.scene-label')].filter(label => getComputedStyle(label).visibility !== 'hidden').map(label => ({ text: label.textContent, rect: label.getBoundingClientRect() }));
+    return boxes.flatMap((a, index) => boxes.slice(index + 1).filter(b => a.rect.left < b.rect.right && a.rect.right > b.rect.left && a.rect.top < b.rect.bottom && a.rect.bottom > b.rect.top).map(b => `${a.text} / ${b.text}`));
+  });
+  assert.deepEqual(hits, [], 'visible scene labels must not overlap');
+}
+
+// Mirrors deckTileOffset in src/scene.ts for a master deck with fewer than 13 mapped pages.
+async function clickMasterPage(page, flat, pageIndex) {
+  if (flat) await page.locator(`#flat-host [data-page="${pageIndex}"][data-page-pid="4100"]`).click();
+  else await clickScenePoint(page, (pageIndex % 6 - 2.5) * .79, 4, -2.25 + (pageIndex < 6 ? -.45 : .45));
+  assert.match(await page.locator('#selection-card h2').innerText(), new RegExp(`Virtual page ${pageIndex}`), 'a selection is explained beside the open scenario panel');
+  if (flat) assert.equal(await page.locator('#flat-host .flat-frame.is-linked').count(), 1, 'a selected page traces to its frame');
+  await openPanel(page, 'inspector');
+  assert.equal(await page.locator('#selection-card').isVisible(), false, 'the inspector replaces the selection card');
+  assert.match(await page.locator('#inspector h2').textContent(), new RegExp(`Virtual page ${pageIndex}`));
+}
+
+const stepLabel = page => page.locator('.step-count').innerText();
+// Links change the URL hash; the app re-renders on the following hashchange event.
+const heading = (page, text) => page.locator('#scenario-content h1', { hasText: text }).waitFor();
+const legend = page => page.locator('.chart-legend').innerText();
+// Where the chart and the first note sit in the panel; stepping must not move either. Measured from the panel's top, because Playwright may scroll the panel to reach a button.
+const layout = page => page.evaluate(() => { const panel = document.querySelector('[data-panel-id="scenarios"]'); return ['.chart', '.scenario-note'].map(selector => document.querySelector(selector).getBoundingClientRect().top + panel.scrollTop).join(); });
+// 3D decks and flat process cards both carry RSS and PSS while the comparison is shown.
+const deckAccounting = (page, flat, pid) => flat
+  ? page.locator(`.flat-process:has([data-pid="${pid}"]) .flat-accounting`).innerText()
+  : page.locator('.scene-label', { hasText: `PID ${pid}` }).textContent();
+
+async function runJourneys(flat) {
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(value => localStorage.setItem('forkscape-flat', String(value)), flat);
+  await page.goto(url);
+
+  assert.equal(await page.locator('[data-panel-id="scenarios"]').isVisible(), false, 'a bare visit opens on the visualization');
+  assert.equal(await page.locator('#panel-menu').isVisible(), false, 'the menu starts collapsed');
+  await openPanel(page, 'scenarios');
+  assert.equal(await page.locator('.scenario-card').count(), scenarioIds.length);
+  assert.equal(await page.locator('.recording-link, .sandbox-link').count(), 0, 'recording and exploration are separate from the scenario list');
+  assert.equal(await page.locator('[data-mode="recording"]').count(), 1, 'the menu offers telemetry replay');
+  assert.equal(await page.locator('[data-mode="sandbox"]').count(), 1, 'the menu offers free exploration');
+  assert.equal(await page.locator('.card-tag').count(), 5, 'scenarios that depend on RSS vs PSS are marked in the library');
+  assert.equal(await page.locator('#view-toggle').isVisible(), true, 'view toggle stays outside the menu');
+  if (flat) assert.equal(await page.locator('#flat-host').isVisible(), true);
+  else {
+    await page.locator('#scene-host canvas').waitFor();
+    assert.equal(await page.locator('#flat-host').isVisible(), false);
+    await assertLabelsSeparate(page);
+    await clickScenePoint(page, -3.6, 1.97, -3.05);
+    await openPanel(page, 'inspector');
+    assert.match(await page.locator('#inspector h2').innerText(), /socket/);
+    await page.locator('#clear-selection').click();
+    await openPanel(page, 'scenarios');
+  }
+
+  await page.locator('.scenario-card[href="#cow-decay"]').click();
+  await heading(page, 'Memory climbs while RSS stays flat');
+  assert.equal(await stepLabel(page), 'STEP 1 / 9');
+  assert.match(await legend(page), /Worker 4101 RSS\s*—/);
+  const layouts = new Set([await layout(page)]);
+  for (let index = 1; index < 9; index++) { await page.locator('#scenario-next').click(); layouts.add(await layout(page)); }
+  assert.equal(layouts.size, 1, 'stepping does not move the chart or what follows it');
+  // A step eases its marks into place, unless the reader asks for reduced motion. The previous step's motion is finished first, since a mark
+  // caught mid-transition can already be where the next step puts it; counting in the click's own task keeps timing out of it.
+  const stepMarks = selector => page.evaluate(selector => {
+    const moving = () => document.getAnimations().filter(animation => animation.effect?.target?.matches('[data-motion]'));
+    moving().forEach(animation => animation.finish());
+    document.querySelector(selector).click();
+    return moving().length;
+  }, selector);
+  assert.ok(await stepMarks('#scenario-prev') > 0, 'stepping animates the chart, comparison, and flat view');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await stepMarks('#scenario-next'), 0, 'with reduced motion, a step snaps into place');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  assert.equal(await stepLabel(page), 'STEP 9 / 9');
+  assert.equal(await page.locator('#scenario-next').isDisabled(), true);
+  assert.match(await legend(page), /Worker 4101 RSS\s*40 KiB/);
+  assert.match(await legend(page), /Worker 4101 PSS\s*32 KiB/);
+  assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*72 KiB/);
+  assert.match(await page.locator('.accounting.key').innerText(), /Σ RSS\s*88 KiB\s*Σ PSS · in use\s*72 KiB\s*RSS overcount\s*16 KiB/, 'the RSS vs PSS callout is shown where it is the point');
+  assert.match(await deckAccounting(page, flat, 4101), /RSS 40 (KiB )?· PSS 32 KiB/);
+  // The fix replays the same setup with one change, from the same step and against the same chart scale.
+  const beforeFix = [await layout(page), await page.locator('.step-slides').evaluate(slides => slides.offsetHeight), await page.locator('.chart-tick').allInnerTexts()];
+  await page.locator('[data-run="fix"]').click();
+  assert.equal(await page.locator('[data-run="fix"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.stepper.is-fix').count(), 1, 'the stepper is framed in the fix’s colour');
+  assert.equal(await stepLabel(page), 'STEP 9 / 9', 'switching to the fix keeps the step');
+  assert.match(await page.locator('.step-slide.is-current .step-caption').innerText(), /Requests 7 and 8 look up entries/);
+  assert.match(await legend(page), /Worker 4101 RSS\s*40 KiB/);
+  assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*52 KiB/, 'with the fix, the catalog stays shared');
+  assert.deepEqual([await layout(page), await page.locator('.step-slides').evaluate(slides => slides.offsetHeight), await page.locator('.chart-tick').allInnerTexts()], beforeFix, 'switching runs moves nothing and keeps the chart’s scale');
+  assert.match(await page.locator('.fix-note').innerText(), /flat buffer/);
+  await openPanel(page, 'timeline');
+  assert.equal(await page.locator('#event-count').innerText(), 'The fix · model');
+  await openPanel(page, 'scenarios');
+  await page.locator('[data-run="problem"]').click();
+  assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*72 KiB/);
+  await page.locator('.acct-seg[data-page-pid="4100"][data-page="3"]').first().click();
+  assert.match(await page.locator('#selection-card h2').innerText(), /Virtual page 3/);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#selection-card').isVisible(), false, 'Escape closes the selection card first');
+  assert.equal(await page.locator('[data-panel-id="scenarios"]').isVisible(), true);
+  await openPanel(page, 'inspector');
+  assert.match(await page.locator('#inspector h2').innerText(), /Virtual page 3/, 'a comparison segment selects its page');
+  assert.match(await page.locator('#inspector').innerText(), /RSS counts it as 4 KiB in each of the 2 mappings; PSS charges each one 2 KiB/);
+  await page.locator('#clear-selection').click();
+  assert.match(await page.locator('#inspector').innerText(), /PSS 40 KiB charges this process its share/);
+  await openPanel(page, 'scenarios');
+  await page.locator('[data-chart-step="4"]').click({ force: true });
+  assert.equal(await stepLabel(page), 'STEP 5 / 9');
+  assert.match(await page.locator('.step-slide.is-current .step-event').innerText(), /RSS is unchanged/);
+  if (!flat) {
+    await assertLabelsSeparate(page);
+    // A step labels only what it changed from the step before: here the worker's copy of catalog page 8 and the frame it copied.
+    assert.deepEqual(await page.locator('.frame-label').evaluateAll(labels => labels.map(label => label.firstChild.textContent)), ['F8', 'F14'], 'a step labels only the frames it changed');
+    assert.equal(await page.locator('.scene-label', { hasText: 'PHYSICAL FRAMES' }).count(), 0, 'layer names are labelled on a scenario’s first step only');
+  }
+
+  await openPanel(page, 'inspector');
+  assert.match(await page.locator('#inspector h2').innerText(), /Virtual page 8/, 'each step points the inspector at the page it touched');
+  assert.match(await page.locator('#inspector').innerText(), /exclusive frame/);
+  await openPanel(page, 'ledger');
+  const ledger = await page.locator('#ledger').innerText();
+  assert.match(ledger, /MAPPED\s+RSS\s+PSS\s+USS/);
+  await page.locator('#ledger + .reference-evidence summary').click();
+  assert.match(await page.locator('#ledger + .reference-evidence').innerText(), /Django 6\.1 .*Σ RSS 259\.8–259\.9 MiB/);
+  await openPanel(page, 'timeline');
+  assert.equal(await page.locator('#step-label').innerText(), 'STEP 5 / 9');
+  await page.locator('#next-step').click();
+  assert.equal(await page.locator('#step-label').innerText(), 'STEP 6 / 9');
+  await page.locator('#prev-step').click();
+
+  await page.locator('#view-toggle').click();
+  if (flat) await page.locator('#scene-host canvas').waitFor();
+  else assert.equal(await page.locator('#flat-host').isVisible(), true);
+  await openPanel(page, 'ledger');
+  assert.equal(await page.locator('#ledger').innerText(), ledger);
+  assert.equal(await page.locator('#ledger + .reference-evidence').getAttribute('open'), '');
+  await openPanel(page, 'timeline');
+  assert.equal(await page.locator('#step-label').innerText(), 'STEP 5 / 9');
+  await page.locator('#view-toggle').click();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('[data-panel-id]:visible').count(), 0, 'Escape closes the open panel');
+
+  // A zoomed camera is framed again when the mode changes, so the page click below lands where stageView says.
+  if (!flat) { await openPanel(page, 'view'); await page.locator('[data-zoom="in"]').click(); await page.locator('[data-zoom="in"]').click(); }
+  await openPanel(page, 'scenarios');
+  await page.locator('#explore-here').click();
+  await heading(page, 'Change the model yourself');
+  assert.match(await page.locator('#scenario-content').innerText(), /Started from step 5 of Memory climbs while RSS stays flat/);
+  await clickMasterPage(page, flat, 0);
+  await openModePanel(page, 'sandbox');
+  await page.locator('[data-lab="fork"]').click();
+  await openPanel(page, 'timeline');
+  assert.equal(await page.locator('#step-label').innerText(), '2 / 2');
+  assert.equal(await page.locator('#event-count').innerText(), '2 states');
+  await openModePanel(page, 'sandbox');
+  assert.equal(await page.locator('[data-lab="write"]').isDisabled(), true, 'the code page is read-only');
+  await page.locator('[data-lab="read"]').click();
+  assert.match(await page.locator('#scenario-content').innerText(), /PID 4100 reads virtual page 0/);
+  assert.equal(await page.locator('details.accounting:not([open])').count(), 1, 'free exploration offers the comparison on request');
+
+  await page.goBack();
+  await heading(page, 'Memory climbs while RSS stays flat');
+  await page.locator('.back-link').click();
+  await heading(page, 'Fork and memory problems, replayed');
+  assert.equal(await page.locator('.scenario-card').count(), scenarioIds.length);
+
+  await page.locator('.scenario-card[href="#leak"]').click();
+  await heading(page, 'A leak grows without limit');
+  assert.equal(await page.locator('details.accounting:not([open])').count(), 1, 'where RSS and PSS agree, the comparison starts closed');
+  await page.locator('details.accounting summary').click();
+  await page.locator('#scenario-next').click();
+  assert.equal(await page.locator('details.accounting[open]').count(), 1, 'the comparison stays open while stepping');
+  assert.match(await deckAccounting(page, flat, 4101), /RSS 40 (KiB )?· PSS 20 KiB/);
+  await page.locator('details.accounting summary').click();
+
+  await page.goto(`${url}#no-preload`);
+  await page.locator('.contrast').waitFor();
+  assert.match(await page.locator('.contrast').innerText(), /With preload\s*108 KiB higher\s*36 KiB\s*Without preload\s*96 KiB\s*48 KiB higher/, 'Σ RSS and Σ PSS rank preload opposite ways');
+
+  if (!flat) {
+    await page.goto(`${url}#thread-lock`);
+    await page.locator('#scenario-prev').waitFor();
+    for (let index = 1; index < 4; index++) await page.locator('#scenario-next').click();
+    await page.locator('.scene-label.label-absent', { hasText: 'thread 5000 absent · holds export-queue' }).waitFor();
+    assert.equal(await page.locator('.scene-label', { hasText: 'thread 4101' }).count(), 1, 'the worker labels its one thread and the lock owner fork left behind');
+  }
+
+  for (const id of scenarioIds) {
+    await page.goto(`${url}#${id}`);
+    await page.locator('#scenario-prev').waitFor();
+    const total = Number((await stepLabel(page)).split('/ ')[1]);
+    for (let index = 1; index < total; index++) await page.locator('#scenario-next').click();
+    assert.equal(await stepLabel(page), `STEP ${total} / ${total}`, `${id} reaches its last step`);
+    await page.locator('[data-run="fix"]').click();
+    for (let index = 1; index < total; index++) await page.locator('#scenario-prev').click();
+    assert.equal(await stepLabel(page), `STEP 1 / ${total}`, `${id}’s fix steps back to its first step`);
+  }
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log(`${flat ? 'Flat' : '3D'} mode stepped through all ${scenarioIds.length} scenarios and their fixes; chart, RSS/PSS comparison, panels, view switch, and free exploration passed.`);
+}
+
+// A recording replays through the same stepper, chart, and scene as a scenario.
+async function runRecordingJourney(flat) {
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(url);
+  await page.evaluate(value => { localStorage.setItem('forkscape-flat', String(value)); sessionStorage.clear(); }, flat);
+  await page.reload();
+  await page.locator('#menu-toggle').click();
+  await page.locator('[data-mode="recording"]').click();
+  await heading(page, 'Replay a recording');
+  assert.equal(await page.locator('.recording-drop').isVisible(), true, 'the picker offers a file');
+
+  await page.locator('#recording-file').setInputFiles({ name: 'empty.json', mimeType: 'application/json', buffer: Buffer.from('{"traceEvents":[]}') });
+  assert.match(await page.locator('.recording-status.is-error').innerText(), /empty\.json could not be replayed\. This trace has no Forkscape header/, 'a file without a header is refused with the fix');
+
+  await page.locator('#open-sample').click();
+  await heading(page, 'Synthetic example: a preloaded Gunicorn boot');
+  assert.match(await stepLabel(page), /^STAGE 1 \/ 16$/);
+  assert.equal(await page.locator('.menu-heading .badge').textContent(), 'Recording', 'every view says it shows a recording');
+  assert.match(await page.locator('.phase-now').innerText(), /Phase 1 of 3: Startup, stages 1–4/);
+  assert.match(await legend(page), /Σ RSS\s*0\.7 MiB/);
+  const layouts = new Set([await layout(page)]);
+  for (let index = 1; index < 16; index++) { await page.locator('#scenario-next').click(); layouts.add(await layout(page)); }
+  assert.equal(layouts.size, 1, 'stepping through a recording does not move the chart or what follows it');
+  assert.equal(await page.locator('#scenario-next').isDisabled(), true);
+  assert.match(await page.locator('.step-slide.is-current .step-caption').innerText(), /Worker 1239 handles a request: GET \/lookup\/42/);
+
+  await page.locator('[data-phase="1"]').click();
+  assert.match(await stepLabel(page), /^STAGE 5 \/ 16$/, 'a phase jumps to its first stage');
+  assert.match(await page.locator('.step-slide.is-current .step-caption').innerText(), /forks worker 1237/);
+  await page.locator('.stage-events summary').click();
+  assert.equal(await page.locator('.stage-events tbody tr').count(), 1);
+  await page.locator('#scenario-next').click();
+  assert.ok(await page.locator('.stage-events tbody tr').count() > 1, 'the events list stays open while stepping');
+  if (flat) assert.match(await page.locator('.flat-process:has([data-pid="1237"])').innerText(), /gunicorn: worker \[app\]/, 'a flat card names its process');
+
+  await page.locator('[data-tiles="48"]').click();
+  assert.match(await stepLabel(page), /^STAGE 6 \/ 16$/, 'finer tiles keep the reader’s stage');
+  await openPanel(page, 'view');
+  assert.equal(await page.locator('#legend-tile').innerText(), '1 tile = 16 pages = 64 KiB');
+  await page.locator('#menu-toggle').click();
+  await page.locator('[data-mode="recording"]').click();
+  assert.equal(await page.locator('[data-panel-id="scenarios"]').isVisible(), true);
+
+  await page.reload();
+  await heading(page, 'Synthetic example: a preloaded Gunicorn boot');
+  await page.locator('#explore-here').click();
+  await heading(page, 'Change the model yourself');
+  assert.match(await page.locator('.lesson-body').first().innerText(), /Started from stage 1 of Synthetic example/);
+  await page.locator('[data-lab="fork"]').click();
+  assert.equal(await page.locator('#action-error').innerText(), '', 'free exploration forks the recorded master');
+  await page.goBack();
+  await heading(page, 'Synthetic example: a preloaded Gunicorn boot');
+  await page.locator('#close-recording').click();
+  await heading(page, 'Replay a recording');
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log(`${flat ? 'Flat' : '3D'} mode replayed the synthetic recording: picker, refused file, every stage, phase jumps, events, tile density, reload, and free exploration passed.`);
+}
+
+async function runPhoneRecording() {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  await page.goto(`${url}#recording/sample`);
+  await page.locator('.stepper.is-recording').waitFor();
+  const [panel, scene] = await Promise.all([page.locator('[data-panel-id="scenarios"]').boundingBox(), page.locator('#scene-host').boundingBox()]);
+  assert.ok(scene.height > 2 * panel.height, 'a recording opens on the scene, with its sheet collapsed');
+  assert.equal(await page.locator('.step-slide.is-current .step-phase').isVisible(), true, 'the collapsed dock names the phase');
+  assert.equal(await page.locator('.phase-rail').isVisible(), false);
+  await page.locator('#sheet-toggle').click();
+  assert.equal(await page.locator('.phase-rail').isVisible(), true, 'the expanded sheet shows the phases');
+  assert.ok(await page.locator('[data-panel-id="scenarios"]').evaluate(element => element.scrollWidth <= element.clientWidth), 'the recording sheet does not scroll sideways');
+  await page.close();
+  console.log('Phone layout opened a recording on the scene with its phase in the dock.');
+}
+
+async function runPhoneCheck() {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  await page.goto(`${url}#decay-oom`);
+  await page.locator('#scene-host canvas').waitFor();
+  const [canvas, host] = await Promise.all([page.locator('#scene-host canvas').boundingBox(), page.locator('#scene-host').boundingBox()]);
+  assert.deepEqual([canvas.width, canvas.height], [host.width, host.height], 'the canvas fills the scene on high-DPI screens');
+  const sheet = page.locator('[data-panel-id="scenarios"]');
+  const [panel, scene, caption] = await Promise.all([sheet.boundingBox(), page.locator('#scene-host').boundingBox(), page.locator('.step-slide.is-current .step-caption').boundingBox()]);
+  assert.ok(scene.y + scene.height <= panel.y + 1, 'on phones the scenario sheet sits under the scene');
+  assert.ok(scene.height > 2 * panel.height, 'a scenario opens on the scene, with its sheet collapsed');
+  assert.ok(caption.y >= panel.y && caption.y + caption.height <= 844, 'the first step is readable on arrival without scrolling');
+  assert.equal(await page.locator('.chart').isVisible(), false, 'the collapsed sheet holds only the step');
+  assert.equal(await page.locator('.step-slide.is-current .step-event').isVisible(), false, 'the step detail waits in the expanded sheet');
+  assert.equal(await page.locator('[data-run="fix"]').isVisible(), false, 'the collapsed sheet keeps the run choice with the notes');
+
+  await page.locator('#sheet-toggle').click();
+  assert.equal(await page.locator('#sheet-toggle').getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.locator('.chart').isVisible(), true, 'expanding the sheet shows the notes');
+  assert.match(await page.locator('.step-detail').innerText(), /This step\s+\S/i, 'the expanded sheet carries the step detail');
+  await page.locator('[data-run="fix"]').click();
+  assert.match(await page.locator('.step-slide.is-current .step-caption').innerText(), /The limit is sized from a load test/, 'the expanded sheet switches to the fix');
+  assert.ok(await sheet.evaluate(element => element.scrollWidth <= element.clientWidth), 'the scenario sheet does not scroll sideways');
+  await sheet.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const [next, expanded] = await Promise.all([page.locator('#scenario-next').boundingBox(), sheet.boundingBox()]);
+  assert.ok(next.y + next.height <= expanded.y + expanded.height + 1 && next.y >= expanded.y, 'Back and Next stay docked while the notes scroll');
+  // A downward swipe on the sheet's head collapses it, as dragging its handle would.
+  const head = await page.locator('.sheet-head').boundingBox();
+  await page.mouse.move(head.x + head.width / 3, head.y + head.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(head.x + head.width / 3, head.y + head.height / 2 + 80, { steps: 4 });
+  await page.mouse.up();
+  assert.equal(await page.locator('.chart').isVisible(), false, 'swiping the head down collapses the sheet');
+  assert.equal(await page.locator('.stepper.is-fix').isVisible(), true, 'the collapsed dock still shows the fix in its colour');
+
+  for (let index = 0; index < 6; index++) await page.locator('#scenario-next').click();
+  await assertLabelsSeparate(page);
+  await page.goto(`${url}#explore`);
+  await heading(page, 'Change the model yourself');
+  assert.equal(await page.locator('[data-lab="fork"]').isVisible(), true, 'free exploration docks its actions under the scene');
+  assert.equal(await page.locator('#reset-model').isVisible(), false);
+  await page.close();
+  console.log('Phone layout kept the canvas sized to the scene, opened scenarios on the scene with the step docked beneath, and expanded and collapsed the sheet.');
+}
+
+try {
+  browser = await chromium.launch({
+    executablePath: process.env.CHROME_BIN || '/usr/bin/google-chrome',
+    headless: true,
+    args: ['--no-sandbox', '--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+  });
+  await runJourneys(true);
+  await runJourneys(false);
+  await runRecordingJourney(true);
+  await runRecordingJourney(false);
+  await runPhoneCheck();
+  await runPhoneRecording();
+} finally {
+  await browser?.close();
+  await server.close();
+}

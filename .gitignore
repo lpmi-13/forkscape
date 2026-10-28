@@ -1,3 +1,23 @@
 node_modules/
 dist/
 .vite/
+/captures/
+/local/
+# Local recorder output, even when a command is run from a source directory.
+*.json
+!/package.json
+!/package-lock.json
+!/tsconfig.json
+*.ndjson
+*.jsonl
+*.json.gz
+*.log
+/docs/captures/
+/public/captures/
+/public/recordings/*
+!/public/recordings/synthetic-gunicorn-boot.json
+/deploy/test/
+/.playwright-cli/
+/playwright-report/
+/test-results/
+__pycache__/

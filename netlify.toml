@@ -1,0 +1,32 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # The page loads only its own files plus Google Fonts (stylesheet from googleapis, font files from gstatic).
+    # Scripts set styles through element.style, which style-src allows without 'unsafe-inline'.
+    Content-Security-Policy = """\
+      default-src 'self'; \
+      style-src 'self' https://fonts.googleapis.com; \
+      font-src https://fonts.gstatic.com; \
+      object-src 'none'; \
+      base-uri 'none'; \
+      form-action 'none'; \
+      frame-ancestors 'none'"""
+    Cross-Origin-Opener-Policy = "same-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000"
+    X-Content-Type-Options = "nosniff"
+
+# Vite puts a content hash in every filename under /assets, so a changed file gets a new URL and these can be cached for good.
+# Everything else, the HTML, icons and preview image included, keeps Netlify's default of revalidating on each request, so a deploy shows at once.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

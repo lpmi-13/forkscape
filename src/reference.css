@@ -1,0 +1,24 @@
+.reference-evidence {
+  margin: 10px 17px 17px;
+  padding: 9px 10px;
+  border: 1px solid #3b5364;
+  border-radius: 5px;
+  color: #9fb4c0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.reference-evidence summary {
+  cursor: pointer;
+  padding: 4px 0;
+  color: #b8d4d8;
+  font: 600 var(--text-sm) 'Fredoka', sans-serif;
+}
+
+.reference-evidence summary:focus-visible {
+  outline: 2px solid #eab67a;
+  outline-offset: 3px;
+}
+
+.reference-evidence p { margin: 9px 0 0; }
+.reference-evidence code { color: #a6d6c4; font-family: 'DM Mono', monospace; }
