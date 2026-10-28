@@ -15,7 +15,7 @@ Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no ba
 
 ## Preferred Linux experiment runtime
 
-Use an **ephemeral Ubuntu 24.04 VM from `labctl`** for kernel experiments and, later, for generating memory-usage telemetry. This keeps the host environment separate from the measured workload and gives each experiment a fresh Linux session. Check the session's expiration with `labctl playground lifetime <playground-id>`; do not persist a playground when reproducible measurements are the goal.
+Use an **ephemeral Ubuntu 24.04 VM from `labctl`** for the small kernel reference experiments. This keeps the host environment separate from the measured workload and gives each experiment a fresh Linux session. Check the session's expiration with `labctl playground lifetime <playground-id>`; do not persist a playground when reproducible measurements are the goal.
 
 ```bash
 labctl playground start ubuntu-24-04 --title forkscape-reference
@@ -39,11 +39,17 @@ labctl cp scripts/cgroup_oom_probe.py <playground-id>:/tmp/forkscape-cgroup-oom-
 labctl ssh <playground-id> -- sudo -n python3 /tmp/forkscape-cgroup-oom-probe.py
 ```
 
-In [all three checked-in OOM runs](docs/probe-variance-2026-10-28.md), the first child had `oom_score_adj=500` and was killed when a second child allocated memory; the cgroup's `oom_kill` counter increased by one. The other event counts varied. These samples are observations from one kernel and workload, not a general accounting or OOM victim-selection rule. Future telemetry bundles should record the kernel, page size, workload, sampling method, and `/proc` and cgroup sources alongside every measurement.
+In [all three checked-in OOM runs](docs/probe-variance-2026-10-28.md), the first child had `oom_score_adj=500` and was killed when a second child allocated memory; the cgroup's `oom_kill` counter increased by one. The other event counts varied. These samples are observations from one kernel and workload, not a general accounting or OOM victim-selection rule. They validate teaching claims; they are not replay bundles.
 
 ## Status
 
-This repository contains a **runnable model-mode vertical slice**, centered on Modules 1–4 plus a creeping-memory case study. It is not the full MVP described in the plan. All displayed terminal output and memory values are explicitly illustrative model data, not Linux measurements.
+This repository contains a **runnable model-mode vertical slice**, centered on Modules 1–4 plus a creeping-memory case study. The current MVP is model-only, narrower than the original plan. All displayed terminal output and memory values are explicitly illustrative model data, not Linux measurements.
+
+### MVP boundary
+
+The MVP does not accept uploaded telemetry or visualize recordings. The reference probes above are small, separate checks on the model's claims. This repository is not intended to generate general telemetry recordings.
+
+After the MVP, this repository should define a versioned contract for recordings produced elsewhere, validate files uploaded through the frontend, and visualize only measurements the files support. The schema, provenance and missing-data rules, file limits, privacy handling, and visual mapping still need decisions. A future viewer should work without a GPU; the existing flat model view already covers systems without WebGL. GPU-specific features remain conditional on supported hardware.
 
 ### Done
 
@@ -64,26 +70,26 @@ This repository contains a **runnable model-mode vertical slice**, centered on M
 - An automated browser check completes the four guided exercises and case study in flat and 3D modes, exercises canvas picking, and verifies that switching views preserves the selected state.
 - Reference probes repeated on three disposable VMs show a 76–80 KiB process-wide `VmPTE` baseline and variable cgroup event counts. The app presents these as labeled Linux reference observations, separate from the model charge and victim choice.
 
-### Next: finish Phase 1
+### Next: finish the model MVP
 
-- Probe additional kernels, allocation patterns, and memory limits before choosing representative replay distributions. The three current VMs share one image and kernel.
-- Validate scene readability with learners and frame budget on an integrated GPU; conduct a manual screen-reader review.
+- Probe additional kernels, allocation patterns, and memory limits to check the model's teaching claims. The three current VMs share one image and kernel.
+- Validate scene readability with learners and conduct a manual screen-reader review. Check the 3D frame budget when an integrated GPU is available.
 
-### Later phases from the plan
+### Original plan backlog, subject to rescoping
 
 | Phase | Remaining work |
 | --- | --- |
-| 0 — discovery | Reference Linux VM; capture/effect-size spikes; renderer and metaphor tests; optional eBPF and flame-graph feasibility decisions. |
-| 2 — capture and replay | Reference Django/Gunicorn/PostgreSQL workload, `/proc` sampler, versioned capture bundles, replay engine, Modules 5–7, real terminal and configuration panes. |
-| 3 — runtime and measurement | CPython heap/GC model, calibrated request scenarios, copy-on-write decay, Module 8, Module 9, sizing calculator, and sandbox controls. |
+| 0 — discovery | Further kernel reference checks, renderer and metaphor tests. |
+| 2 — telemetry, deferred beyond MVP | Decide a recording contract and frontend validation for externally produced files, then consider upload and visualization. The repository will not contain a general recording pipeline. |
+| 3 — runtime and measurement | CPython heap/GC model, modeled request scenarios, copy-on-write decay, Module 8, Module 9, sizing calculator, and sandbox controls. Calibration from recordings is deferred. |
 | 4 — drills and pilot | Modules 0 and 10, incident drills D1–D3, concept inventory/map, progress import, expert fact review, accessibility and performance gates, pilot study. |
-| Conditional | eBPF trace replay and 4D flame graph only if the plan's S5/S6 spikes justify them. |
-| 5 — extensions | Live lab, learner application recording, Celery and other prefork systems. |
+| Conditional | GPU-heavy views only where supported and justified by usability and performance checks. |
+| 5 — extensions | Celery and other prefork systems; live lab and learner recording remain outside the current scope. |
 
 ## Model boundaries
 
 The starting example has six 4 KiB mapped data pages in one master. A fork adds another address space pointing to the same data frames; the first write to a shared private page creates one new 4 KiB frame. The case study adds a 12-page catalog before fork: one branch writes a new catalog page per request until every page has been copied, while the other retains one new private page per request. RSS, PSS, and USS count **mapped data pages only**. The model charge adds one root page-table page per running process and one leaf page per occupied group of 512 virtual pages. File-backed frames are released when their last model mapping disappears, and OOM chooses a process by mapped-page count. These are teaching simplifications, not Linux or cgroup accounting. The model omits other kernel structures and actual socket I/O, so it must not be used to size a real deployment. The 3D floor layout is schematic and does not represent physical frame addresses.
 
-The model source is [src/model.ts](src/model.ts), the interface is [src/main.ts](src/main.ts), and the three.js renderer is [src/scene.ts](src/scene.ts). Both renderers consume the same `WorldState`. Recorded runs will use that contract when the capture pipeline exists.
+The model source is [src/model.ts](src/model.ts), the interface is [src/main.ts](src/main.ts), and the three.js renderer is [src/scene.ts](src/scene.ts). Both model renderers consume the same `WorldState`. A future recording format and its relation to `WorldState` remain design decisions; aggregate `/proc` figures alone cannot establish exact frame mappings.
 
 The visual styling is in [src/theme.css](src/theme.css). Purple tiles and stacked rings indicate shared frames; green tiles indicate an exclusive frame without a worker owner. Warm amber identifies the master, while worker colors remain distinct. Decorative dusk colors and the pixel-styled interface do not change model values or data-source labels.
