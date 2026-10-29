@@ -125,12 +125,20 @@ button:focus-visible,input:focus-visible,label:focus-within{outline-color:#ffe07
 .stepper-controls button{padding:8px 12px;border:2px solid #8a6caa;border-radius:4px;background:#2e3158;color:#fce8d3;font-size:12px;font-weight:600;box-shadow:2px 2px 0 #151731}
 .stepper-controls .step-next{background:#ffcc73;border-color:#fff0a7;color:#352747;box-shadow:3px 3px 0 #a75f80}
 .stepper-controls .step-next:hover:not(:disabled){background:#ffe08e}
-.step-caption{min-height:3em;margin:12px 0 7px;color:#fff5de;font-size:14px;line-height:1.5}
+.step-caption{margin:12px 0 7px;color:#fff5de;font-size:14px;line-height:1.5}
+/* Every step's text shares one grid cell, so the stepper is as tall as its longest step and nothing below it moves while stepping. */
+.step-slides{display:grid}
+.step-slide{grid-area:1/1}
+.step-slide:not(.is-current){visibility:hidden}
 .step-event{margin:0;color:#c9c3dc;font:11px/1.5 'DM Mono',monospace}
 .chart{margin:16px 0 0;padding:12px 10px 8px;border:1px solid #4a4670;border-radius:6px;background:#1b1f3e}
 .chart-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0 0 6px;padding:0;list-style:none;color:#e5dfe8;font-size:11px}
 .chart-legend li{display:flex;align-items:center;gap:6px}
 .chart-legend strong{color:#fff3db;font-weight:600}
+/* A legend value reserves the width of every value it takes, so the legend never rewraps between steps. */
+.legend-value{display:inline-grid}
+.legend-value>span{grid-area:1/1}
+.legend-value>[aria-hidden]{visibility:hidden}
 /* Colour follows the metric in every chart: RSS amber, per-process PSS magenta, memory in use (Σ PSS) and the cgroup charge blue. */
 .metric-rss{--series:#c77a22}
 .metric-pss{--series:#d55181}
@@ -157,6 +165,8 @@ button:focus-visible,input:focus-visible,label:focus-within{outline-color:#ffe07
 .related{display:grid;gap:7px;margin-top:20px}
 .related a{color:#a9e5d5;font-size:12px}
 .legend-swatch.absent{background:transparent;border:1px dashed #c9c2ee}
+.legend-line{display:inline-block;width:16px;margin-right:7px;vertical-align:middle;border-top:1px solid #ffc66f}
+.legend-line.cable{height:4px;border:0;border-radius:2px;background:#65dfcb}
 .page-chip.is-absent{background:transparent;border:1px dashed #aaa3d6;color:#e2def5}
 
 /* RSS vs PSS comparison: a callout in scenarios that depend on it, a disclosure elsewhere. Segment colours match the shared/exclusive legend. */
@@ -193,3 +203,20 @@ button:focus-visible,input:focus-visible,label:focus-within{outline-color:#ffe07
 .contrast td.is-higher{color:#fff3db;font-weight:700}
 .contrast small{color:#ffc2b5;font-size:10px;font-weight:500}
 .flat-process>button span.flat-accounting{color:#e6dcff}
+
+/* Tracing: what a selection links to gets a softer, offset ring in the selection colour. */
+.page-chip.is-linked,.flat-frame.is-linked,.structure-list button.is-linked{outline:2px solid #ffda80a6;outline-offset:2px}
+.structure-list button.selected{outline:2px solid #ffda80}
+
+/* Selection card: what a click selected, over the scene, so the scenario stays open beside it. */
+.flat-host{scrollbar-gutter:stable}
+.scene-column.card-open .flat-host{padding-bottom:380px}
+.selection-card{position:absolute;right:12px;bottom:12px;z-index:5;display:flex;flex-direction:column;gap:8px;width:min(340px,calc(100% - 24px));max-height:min(46%,360px);padding:13px 14px 13px;border:2px solid #ffda80;border-radius:7px;background:#2a2b4d;box-shadow:4px 4px 0 #151731;color:#fff3db}
+.selection-card .panel-close{position:absolute;top:10px;right:10px}
+.selection-card h2{margin:0 34px 3px 0;font:600 19px/1.15 'Fredoka',sans-serif;color:#fff0bd;text-shadow:2px 2px 0 #694366}
+.selection-card h2 em{font-style:normal;color:#ffb981}
+.selection-summary{margin:0;color:#d6d9e5;font-size:12px}
+.selection-detail{flex:0 1 auto;min-height:0;overflow:auto;border-top:1px dashed #75698e;padding-top:8px}
+.selection-detail p{margin:0 0 7px;color:#f6e7dd;font-size:12px;line-height:1.5}
+.selection-detail p:last-child{margin-bottom:0}
+#open-inspector{align-self:flex-start}

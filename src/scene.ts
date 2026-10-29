@@ -46,6 +46,7 @@ export class ForkScene {
   private selectedFrame: number | null = null;
   private selectedObjectId: string | null = null;
   private selectedStructure: { pid: number; part: StructurePart; index: number } | null = null;
+  private pressedAt: [number, number] | null = null;
   /** Adds each process's RSS and PSS to its label; read on the next setWorld. */
   showAccounting = false;
 
@@ -76,6 +77,8 @@ export class ForkScene {
     this.scene.add(neon);
     this.scene.add(this.dynamic);
     this.raycaster.params.Line.threshold = .12;
+    this.renderer.domElement.addEventListener('pointerdown', this.pointerDown);
+    this.renderer.domElement.addEventListener('pointermove', this.hover);
     this.renderer.domElement.addEventListener('click', this.click);
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(host);
@@ -139,6 +142,18 @@ export class ForkScene {
     return line;
   }
 
+  // A descriptor is a thick, sagging cable from a port on the deck, so it never reads as one of the straight page-to-frame filaments.
+  private addCable(from: THREE.Vector3, to: THREE.Vector3, color: number, highlighted: boolean) {
+    const curve = new THREE.QuadraticBezierCurve3(from, from.clone().lerp(to, .5).setY((from.y + to.y) / 2 - .3 - from.distanceTo(to) * .1), to);
+    const material = () => new THREE.MeshStandardMaterial({ color: highlighted ? 0xffffff : color, emissive: color, emissiveIntensity: highlighted ? .7 : .35, roughness: .45 });
+    const cable = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, highlighted ? .05 : .035, 6), material());
+    const port = new THREE.Mesh(new THREE.BoxGeometry(.17, .13, .1), material());
+    port.position.copy(from);
+    this.dynamic.add(cable, port);
+    // Cables converge on their object, so each is labelled near its own port.
+    return { parts: [cable, port], labelPoint: curve.getPoint(.3) };
+  }
+
   // When labels overlap on screen, the higher-priority one stays visible.
   private label(text: string, point: THREE.Vector3, priority: number, className = '', detail = '') {
     const element = document.createElement('div');
@@ -170,6 +185,8 @@ export class ForkScene {
     this.dynamic.add(grid);
     this.label('PHYSICAL FRAMES', new THREE.Vector3(-4.7, .02, 3.25), 1, 'scene-label-small');
     this.label('KERNEL · PAGE TABLES', new THREE.Vector3(-4.65, kernelY + .03, 3.15), 1, 'scene-label-small');
+    // A selected page traces to its frame; a selected frame traces to every page mapped to it.
+    const tracedFrame = this.selectedFrame ?? (this.selectedPage && world.processes.find(p => p.pid === this.selectedPage!.pid)?.pages[this.selectedPage.page]) ?? null;
 
     const objectPositions = new Map<string, THREE.Vector3>();
     world.kernelObjects.forEach((object, index) => {
@@ -200,7 +217,7 @@ export class ForkScene {
       const tileEdge = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineBasicMaterial({ color: count > 1 ? 0xf1b6ff : 0xd7ffb2, transparent: true, opacity: .75 }));
       tileEdge.position.copy(tile.position);
       this.dynamic.add(tileEdge);
-      if (this.selectedFrame === frame.id) {
+      if (tracedFrame === frame.id) {
         const marker = new THREE.Mesh(new THREE.TorusGeometry(.59, .035, 4, 16), new THREE.MeshBasicMaterial({ color: 0xffe794 }));
         marker.rotation.x = -Math.PI / 2;
         marker.position.set(x, .23, z);
@@ -242,11 +259,15 @@ export class ForkScene {
       this.pickables.push(pageTable);
       process.descriptors.forEach((descriptor, index) => {
         const point = objectPositions.get(descriptor.objectId);
-        if (point) {
+        const object = world.kernelObjects.find(item => item.id === descriptor.objectId);
+        if (point && object) {
           const cableSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'cable' && this.selectedStructure.index === index;
-          const cable = this.addLine(new THREE.Vector3(x - 2.35 + index * .2, y, z - .7), point, cableSelected ? 0xffffff : 0xffd38d, cableSelected ? 1 : .7);
-          cable.userData.selection = { kind: 'structure', pid: process.pid, part: 'cable', index } satisfies SceneSelection;
-          this.pickables.push(cable);
+          const cable = this.addCable(new THREE.Vector3(x - 2.35 + index * .2, y, z - 1.1), point.clone().setY(point.y + .18), object.kind === 'socket' ? 0x65dfcb : 0xf7bc79, cableSelected || this.selectedObjectId === object.id);
+          cable.parts.forEach(part => {
+            part.userData.selection = { kind: 'structure', pid: process.pid, part: 'cable', index } satisfies SceneSelection;
+            this.pickables.push(part);
+          });
+          this.label(`fd ${descriptor.fd}`, cable.labelPoint, 3, 'scene-label-small');
         }
       });
       process.threadIds.forEach((tid, index) => {
@@ -272,6 +293,8 @@ export class ForkScene {
       const mappedPages = process.regions.flatMap(region => Array.from({ length: region.pageCount }, (_, offset) => region.startPage + offset))
         .sort((a, b) => a - b).map(pageIndex => ({ frameId: process.pages[pageIndex] ?? null, pageIndex }));
       if (mappedPages.length > 24) this.label(`+${mappedPages.length - 24} pages · see flat view`, new THREE.Vector3(x, y + .3, z + .9), 0, 'scene-label-small');
+      const filamentMiddles: THREE.Vector3[] = [];
+      let tracedMiddle: THREE.Vector3 | undefined;
       mappedPages.slice(0, 24).forEach(({ frameId, pageIndex }, visualIndex) => {
         const offset = deckTileOffset(visualIndex, mappedPages.length);
         const px = x + offset.x;
@@ -286,23 +309,50 @@ export class ForkScene {
         }
         tile.userData.selection = { kind: 'page', pid: process.pid, page: pageIndex } satisfies SceneSelection;
         this.pickables.push(tile);
-        if (this.selectedPage?.pid === process.pid && this.selectedPage.page === pageIndex) {
+        const pageSelected = this.selectedPage?.pid === process.pid && this.selectedPage.page === pageIndex;
+        const traced = frameId !== null && frameId === tracedFrame;
+        if (pageSelected || traced) {
           const edge = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineBasicMaterial({ color: 0xffe794 }));
           edge.position.copy(tile.position);
           this.dynamic.add(edge);
         }
         const floor = frameId === null ? undefined : framePositions.get(frameId);
-        if (floor) this.addLine(new THREE.Vector3(px, y, pz), new THREE.Vector3(floor.x, .18, floor.z), color, isSelected ? .6 : .22);
+        if (floor) {
+          const start = new THREE.Vector3(px, y, pz), end = new THREE.Vector3(floor.x, .18, floor.z);
+          const filament = this.addLine(start, end, traced ? 0xffffff : color, traced ? 1 : isSelected ? .6 : .22);
+          filament.userData.selection = { kind: 'page', pid: process.pid, page: pageIndex } satisfies SceneSelection;
+          this.pickables.push(filament);
+          const middle = start.clone().lerp(end, .5);
+          filamentMiddles.push(middle);
+          if (pageSelected) tracedMiddle = middle;
+        }
       });
+      // Name the selected process's filaments where they hang, on the traced one when a page is selected.
+      if (isSelected && filamentMiddles.length) this.label('page → frame', tracedMiddle ?? filamentMiddles[Math.floor(filamentMiddles.length / 2)], 3.5, 'scene-label-small');
     });
   }
 
-  private click = (event: MouseEvent) => {
+  private pick(event: MouseEvent) {
     const bounds = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1);
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hit = this.raycaster.intersectObjects(this.pickables)[0];
-    if (hit?.object.userData.selection) this.onSelect?.(hit.object.userData.selection as SceneSelection);
+    const hits = this.raycaster.intersectObjects(this.pickables);
+    // Thin filaments are easy to graze, so a solid object under the pointer wins over them.
+    const hit = hits.find(item => !(item.object instanceof THREE.Line)) ?? hits[0];
+    return hit?.object.userData.selection as SceneSelection | undefined;
+  }
+
+  private pointerDown = (event: PointerEvent) => { this.pressedAt = [event.clientX, event.clientY]; };
+  private hover = (event: PointerEvent) => {
+    if (event.buttons) return;
+    this.renderer.domElement.style.cursor = this.pick(event) ? 'pointer' : '';
+  };
+
+  private click = (event: MouseEvent) => {
+    // Releasing an orbit drag also fires click; only a press that stayed put selects.
+    if (this.pressedAt && Math.hypot(event.clientX - this.pressedAt[0], event.clientY - this.pressedAt[1]) > 5) return;
+    const selection = this.pick(event);
+    if (selection) this.onSelect?.(selection);
   };
 
   private renderFrame = () => {
@@ -356,6 +406,8 @@ export class ForkScene {
     this.controls.removeEventListener('change', this.renderFrame);
     this.clear();
     this.controls.dispose();
+    this.renderer.domElement.removeEventListener('pointerdown', this.pointerDown);
+    this.renderer.domElement.removeEventListener('pointermove', this.hover);
     this.renderer.domElement.removeEventListener('click', this.click);
     this.renderer.dispose();
     this.renderer.domElement.remove();

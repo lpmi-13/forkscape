@@ -48,7 +48,10 @@ async function assertLabelsSeparate(page) {
 async function clickMasterPage(page, flat, pageIndex) {
   if (flat) await page.locator(`#flat-host [data-page="${pageIndex}"][data-page-pid="4100"]`).click();
   else await clickScenePoint(page, (pageIndex % 6 - 2.5) * .79, 4, -2.25 + (pageIndex < 6 ? -.45 : .45));
+  assert.match(await page.locator('#selection-card h2').innerText(), new RegExp(`Virtual page ${pageIndex}`), 'a selection is explained beside the open scenario panel');
+  if (flat) assert.equal(await page.locator('#flat-host .flat-frame.is-linked').count(), 1, 'a selected page traces to its frame');
   await openPanel(page, 'inspector');
+  assert.equal(await page.locator('#selection-card').isVisible(), false, 'the inspector replaces the selection card');
   assert.match(await page.locator('#inspector h2').textContent(), new RegExp(`Virtual page ${pageIndex}`));
 }
 
@@ -56,6 +59,8 @@ const stepLabel = page => page.locator('.stepper-controls span').innerText();
 // Links change the URL hash; the app re-renders on the following hashchange event.
 const heading = (page, text) => page.locator('#scenario-content h1', { hasText: text }).waitFor();
 const legend = page => page.locator('.chart-legend').innerText();
+// Where the chart and the first note sit; stepping must not move either.
+const layout = page => page.evaluate(() => ['.chart', '.scenario-note'].map(selector => document.querySelector(selector).getBoundingClientRect().top).join());
 // 3D decks and flat process cards both carry RSS and PSS while the comparison is shown.
 const deckAccounting = (page, flat, pid) => flat
   ? page.locator(`.flat-process:has([data-pid="${pid}"]) .flat-accounting`).innerText()
@@ -90,7 +95,9 @@ async function runJourneys(flat) {
   await heading(page, 'Memory climbs while RSS stays flat');
   assert.equal(await stepLabel(page), 'STEP 1 / 9');
   assert.match(await legend(page), /Worker 4101 RSS\s*—/);
-  for (let index = 1; index < 9; index++) await page.locator('#scenario-next').click();
+  const layouts = new Set([await layout(page)]);
+  for (let index = 1; index < 9; index++) { await page.locator('#scenario-next').click(); layouts.add(await layout(page)); }
+  assert.equal(layouts.size, 1, 'stepping does not move the chart or what follows it');
   assert.equal(await stepLabel(page), 'STEP 9 / 9');
   assert.equal(await page.locator('#scenario-next').isDisabled(), true);
   assert.match(await legend(page), /Worker 4101 RSS\s*40 KiB/);
@@ -99,6 +106,10 @@ async function runJourneys(flat) {
   assert.match(await page.locator('.accounting.key').innerText(), /Σ RSS\s*88 KiB\s*Σ PSS · IN USE\s*72 KiB\s*RSS OVERCOUNT\s*16 KiB/, 'the RSS vs PSS callout is shown where it is the point');
   assert.match(await deckAccounting(page, flat, 4101), /RSS 40 (KiB )?· PSS 32 KiB/);
   await page.locator('.acct-seg[data-page-pid="4100"][data-page="3"]').first().click();
+  assert.match(await page.locator('#selection-card h2').innerText(), /Virtual page 3/);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#selection-card').isVisible(), false, 'Escape closes the selection card first');
+  assert.equal(await page.locator('[data-panel-id="scenarios"]').isVisible(), true);
   await openPanel(page, 'inspector');
   assert.match(await page.locator('#inspector h2').innerText(), /Virtual page 3/, 'a comparison segment selects its page');
   assert.match(await page.locator('#inspector').innerText(), /RSS counts it as 4 KiB in each of the 2 mappings; PSS charges each one 2 KiB/);
@@ -107,7 +118,7 @@ async function runJourneys(flat) {
   await openPanel(page, 'scenarios');
   await page.locator('[data-chart-step="4"]').click({ force: true });
   assert.equal(await stepLabel(page), 'STEP 5 / 9');
-  assert.match(await page.locator('.step-event').innerText(), /RSS is unchanged/);
+  assert.match(await page.locator('.step-slide.is-current .step-event').innerText(), /RSS is unchanged/);
   if (!flat) await assertLabelsSeparate(page);
 
   await openPanel(page, 'inspector');

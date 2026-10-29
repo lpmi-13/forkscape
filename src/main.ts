@@ -28,6 +28,7 @@ let scene: ForkScene | null = null;
 let sceneLoading = false;
 let openPanel: PanelId | null = 'scenarios';
 let menuOpen = false;
+let selectionCardOpen = false;
 let accountingOpen = false;
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -58,12 +59,13 @@ root.innerHTML = `
     <section class="scene-column" aria-label="Process and memory visualization">
       <div id="scene-host" class="scene-host"></div>
       <div id="flat-host" class="flat-host" hidden></div>
+      <aside id="selection-card" class="selection-card" aria-label="Selection" hidden><button id="close-selection-card" class="panel-close" type="button" aria-label="Close selection details">×</button><div id="selection-card-heading" aria-live="polite"></div><div id="selection-card-detail" class="selection-detail"></div><button id="open-inspector" class="subtle" type="button">Open in inspector</button></aside>
     </section>
     ${drawer('scenarios', 'MODEL', '<section id="scenario-content" class="scenario-content"></section>', 'lesson-rail', 'scenario-meta')}
     ${drawer('inspector', 'MODEL', '<div id="inspector" class="inspector"></div>')}
     ${drawer('timeline', '', '<div class="timeline-controls"><button id="prev-step" type="button" aria-label="Previous state">◀</button><button id="next-step" type="button" aria-label="Next state">▶</button><input id="time-range" type="range" min="0" max="0" value="0" aria-label="Timeline state" /><span id="step-label"></span></div><div id="event-strip" class="event-strip"></div>', 'timeline-panel', 'event-count')}
     ${drawer('ledger', 'MODEL · PAGE TABLES INCLUDED IN CHARGE', '<div id="ledger"></div><details class="reference-evidence"><summary>Linux reference observations · VM probes</summary><p>Residency: a new mapping has 0 KiB RSS until touched, and reading untouched anonymous pages leaves it at 0. After fork, a child’s RSS includes anonymous pages but not file pages that were never written. Its first touch maps them from the page cache. A child’s copy-on-write write left its RSS unchanged and added 4 KiB of <code>Private_Dirty</code>.</p><p>Django 6.1 under Gunicorn with preload and 2 workers: Σ RSS 259.8–259.9 MiB at boot against Σ PSS 90.2–90.3 MiB. One read-only catalog scan per worker added 55.2 MiB of Σ PSS and no Σ RSS.</p><p>Page tables: parent <code>VmPTE</code> rose by 0–8 KiB after mapping 16–1,024 pages, from a 76–80 KiB process-wide baseline. Those readings cannot isolate a mapping’s page tables.</p><p>With a 64 MiB cgroup limit, <code>memory.events: oom_kill</code> rose by one in each run. The kernel killed the child with the higher <code>oom_score_adj</code>; the model’s victim choice is only a teaching rule.</p></details>', 'ledger-panel')}
-    ${drawer('view', 'MODEL', '<div class="panel-body"><div class="section-tag">3D CAMERA</div><div class="camera-controls" aria-label="3D camera controls"><button type="button" data-camera="overview">Overview</button><button type="button" data-camera="process">Decks</button><button type="button" data-camera="memory">Frames</button><button type="button" data-zoom="in" aria-label="Zoom in">＋</button><button type="button" data-zoom="out" aria-label="Zoom out">−</button></div><div class="section-tag">LEGEND</div><ul class="legend"><li>1 tile = 1 page = 4 KiB</li><li><i class="legend-swatch shared"></i>shared</li><li><i class="legend-swatch private"></i>exclusive</li><li><i class="legend-swatch absent"></i>mapped, not resident</li><li>Physical layout is schematic</li></ul></div>')}
+    ${drawer('view', 'MODEL', '<div class="panel-body"><div class="section-tag">3D CAMERA</div><div class="camera-controls" aria-label="3D camera controls"><button type="button" data-camera="overview">Overview</button><button type="button" data-camera="process">Decks</button><button type="button" data-camera="memory">Frames</button><button type="button" data-zoom="in" aria-label="Zoom in">＋</button><button type="button" data-zoom="out" aria-label="Zoom out">−</button></div><div class="section-tag">LEGEND</div><ul class="legend"><li>1 tile = 1 page = 4 KiB</li><li><i class="legend-swatch shared"></i>shared</li><li><i class="legend-swatch private"></i>exclusive</li><li><i class="legend-swatch absent"></i>mapped, not resident</li><li><i class="legend-line filament"></i>thin line: a page mapped to its frame</li><li><i class="legend-line cable"></i>cable: a descriptor open on a kernel object</li><li>Physical layout is schematic</li></ul></div>')}
   </main>
   <div id="narration" class="sr-only" aria-live="polite"></div>
 `;
@@ -80,9 +82,15 @@ function renderChrome() {
   root.querySelectorAll<HTMLElement>('[data-panel]').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.panel === openPanel)));
   root.querySelectorAll<HTMLElement>('[data-panel-id]').forEach(panel => { panel.hidden = panel.dataset.panelId !== openPanel; });
   root.querySelector('.workspace')!.classList.toggle('panel-open', openPanel !== null);
+  // The inspector says everything the card does, so the card gives way to it.
+  const card = root.querySelector<HTMLElement>('#selection-card')!;
+  card.hidden = !selectionCardOpen || openPanel === 'inspector';
+  root.querySelector('.scene-column')!.classList.toggle('card-open', !card.hidden);
 }
 function showPanel(id: PanelId | null) {
-  openPanel = id; menuOpen = false; renderChrome();
+  openPanel = id; menuOpen = false;
+  if (id === 'inspector') selectionCardOpen = false;
+  renderChrome();
   root.querySelector<HTMLElement>(id ? `[data-panel-id="${id}"]` : '#menu-toggle')!.focus({ preventScroll: true });
 }
 async function ensureScene() {
@@ -107,6 +115,7 @@ function focusScenarioStep(scenario: Scenario) {
 }
 function goToStep(index: number) {
   step = Math.max(0, Math.min(history.length - 1, index));
+  selectionCardOpen = false;
   if (mode.kind === 'scenario') focusScenarioStep(mode.scenario);
   else if (mode.kind === 'sandbox') sandboxStep = step;
   render();
@@ -115,7 +124,7 @@ function goToStep(index: number) {
 function applyHash(userNavigation: boolean) {
   const id = decodeURIComponent(location.hash.slice(1));
   const scenario = scenarioById(id);
-  actionError = '';
+  actionError = ''; selectionCardOpen = false;
   if (id === 'explore') {
     mode = { kind: 'sandbox' }; history = sandboxHistory; step = sandboxStep; clearSelection();
   } else if (scenario) {
@@ -154,8 +163,9 @@ function renderChart(scenario: Scenario, states: WorldState[]) {
   const ticks = [0, yMax / 2, yMax];
   const band = states.length === 1 ? width - left - right : (width - left - right) / (states.length - 1);
   const current = values.map(series => series[step]);
+  const reading = (value: number | null) => value === null ? '—' : `${value} KiB`;
   return `<figure class="chart" aria-label="${escapeHtml(chart.series.map(series => series.label).join(' and '))} by step">
-    <ul class="chart-legend">${chart.series.map((series, index) => `<li><i class="line-key ${metricClass(series)}" aria-hidden="true"></i><span>${escapeHtml(series.label)}</span><strong>${current[index] === null ? '—' : `${current[index]} KiB`}</strong></li>`).join('')}</ul>
+    <ul class="chart-legend">${chart.series.map((series, index) => `<li><i class="line-key ${metricClass(series)}" aria-hidden="true"></i><span>${escapeHtml(series.label)}</span><strong class="legend-value">${[...new Set(values[index].map(reading))].map(text => `<span${text === reading(current[index]) ? '' : ' aria-hidden="true"'}>${text}</span>`).join('')}</strong></li>`).join('')}</ul>
     <div class="chart-plot"><svg viewBox="0 0 ${width} ${height}" role="img" aria-hidden="true">
       ${ticks.map(tick => `<line class="chart-grid" x1="${left}" x2="${width - right}" y1="${y(tick)}" y2="${y(tick)}"/><text class="chart-tick" x="${left - 6}" y="${y(tick) + 3}" text-anchor="end">${tick}${tick === yMax ? ' KiB' : ''}</text>`).join('')}
       ${states.map((_, index) => `<text class="chart-tick" x="${x(index)}" y="${height - 6}" text-anchor="middle">${index + 1}</text>`).join('')}
@@ -203,8 +213,10 @@ function renderAccounting(state: WorldState) {
   if (!running.length) return '<p class="accounting-empty">No running process has resident pages.</p>';
   const rows = memoryRows(state);
   const width = 360, nameWidth = 52, metricWidth = 26, valueWidth = 54, bar = 9, rowGap = 3, groupGap = 11;
-  const scale = (width - nameWidth - metricWidth - valueWidth) / Math.max(...rows.map(row => row.rss));
-  const group = 2 * bar + rowGap, height = running.length * group + (running.length - 1) * groupGap + 2;
+  // One scale and one height for the whole timeline: stepping grows the bars instead of rescaling them or moving what follows.
+  const slots = Math.max(running.length, ...history.map(item => item.processes.filter(process => process.status === 'running' && residentPages(process) > 0).length));
+  const scale = (width - nameWidth - metricWidth - valueWidth) / Math.max(...[state, ...history].flatMap(item => memoryRows(item).map(row => row.rss)));
+  const group = 2 * bar + rowGap, height = slots * group + (slots - 1) * groupGap + 2;
   const svg = running.map((process, index) => {
     const top = 1 + index * (group + groupGap), row = rows.find(item => item.pid === process.pid)!;
     const pages = process.pages.flatMap((id, page) => id === null ? [] : [{ page, id, count: sharers(state, id) }]).sort((a, b) => a.count - b.count || a.page - b.page);
@@ -249,14 +261,12 @@ function renderAccountingSection(scenario: Scenario | null) {
 function renderScenario(scenario: Scenario) {
   const states = history, index = scenarios.filter(item => item.group === scenario.group).indexOf(scenario) + 1;
   const total = scenarios.filter(item => item.group === scenario.group).length;
-  const event = states[step].events.at(-1)!;
   return `<a class="back-link" href="#scenarios">← All scenarios</a>
     <div class="lesson-kicker">${escapeHtml(groupLabels[scenario.group].toUpperCase())} · ${index} OF ${total}</div><h1 tabindex="-1">${escapeHtml(scenario.title)}</h1>
     <p class="symptom">${escapeHtml(scenario.symptom)}</p>
     <div class="stepper">
       <div class="stepper-controls"><button id="scenario-prev" type="button" ${step === 0 ? 'disabled' : ''}>◀ Back</button><span>STEP ${step + 1} / ${states.length}</span><button id="scenario-next" class="step-next" type="button" ${step === states.length - 1 ? 'disabled' : ''}>Next ▶</button></div>
-      <p class="step-caption">${escapeHtml(scenario.steps[step].caption)}</p>
-      <p class="step-event">${escapeHtml(event.description)}</p>
+      <div class="step-slides">${scenario.steps.map((item, index) => `<div class="step-slide${index === step ? ' is-current' : ''}"><p class="step-caption">${escapeHtml(item.caption)}</p><p class="step-event">${escapeHtml(states[index].events.at(-1)!.description)}</p></div>`).join('')}</div>
     </div>
     ${renderChart(scenario, states)}
     ${scenario.group === 'memory' ? renderAccountingSection(scenario) : ''}
@@ -295,27 +305,36 @@ function renderScenarioPanel() {
   root.querySelector('#scenario-meta')!.textContent = mode.kind === 'sandbox' ? 'FREE EXPLORATION' : `${scenarios.length} SCENARIOS · MODEL`;
 }
 
+// A selected page traces to its frame, a frame to every page mapped to it, and a cable to its kernel object.
+const tracedFrame = (state: WorldState) => selectedFrame ?? (selectedPage && state.processes.find(p => p.pid === selectedPage!.pid)?.pages[selectedPage.page]) ?? null;
+const tracedObject = (state: WorldState) => selectedObjectId ?? (selectedStructure?.part === 'cable' ? state.processes.find(p => p.pid === selectedStructure!.pid)?.descriptors[selectedStructure.index]?.objectId : null) ?? null;
 const accountingLabel = (state: WorldState, pid: number) => { const row = memoryRows(state).find(item => item.pid === pid)!; return `RSS ${kb(row.rss)} · PSS ${kb(row.pss)}`; };
 function renderFlat(state: WorldState) {
   const showAccounting = accountingVisible();
+  const frameTrace = tracedFrame(state), objectTrace = tracedObject(state);
   const chip = (process: ProcessState, index: number, region: RegionState) => {
     const id = process.pages[index] ?? null;
-    const selected = selectedPage?.pid === process.pid && selectedPage.page === index ? 'selected' : '';
+    const selected = selectedPage?.pid === process.pid && selectedPage.page === index ? 'selected' : id !== null && id === frameTrace ? 'is-linked' : '';
     return id === null
       ? `<button type="button" data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, ${escapeHtml(region.name)}, not resident" class="page-chip is-absent ${selected}">${index} · —<small>${escapeHtml(region.name)}</small></button>`
       : `<button type="button" data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, ${escapeHtml(region.name)}, frame ${id}" class="page-chip ${sharers(state, id) > 1 ? 'is-shared' : ''} ${selected}">${index}→F${id}<small>${escapeHtml(region.name)}</small></button>`;
   };
-  root.querySelector('#flat-host')!.innerHTML = `<div class="flat-title">PROCESS ADDRESS SPACES</div><div class="flat-processes">${state.processes.map(process => `<div class="flat-process ${selectedPid === process.pid && selectedPage === null && selectedStructure === null ? 'selected' : ''}"><button type="button" data-pid="${process.pid}"><strong>${process.role.toUpperCase()} · PID ${process.pid}</strong><span>${process.status === 'zombie' ? 'ZOMBIE · mappings released' : `PPID ${process.parentPid ?? '—'} · ${residentPages(process)} of ${mappedPages(process)} pages resident · ${process.threadIds.length} thread(s)`}</span>${showAccounting && process.status === 'running' ? `<span class="flat-accounting">${accountingLabel(state, process.pid)}</span>` : ''}</button><div class="page-strip">${process.regions.flatMap(region => regionPages(region).map(index => chip(process, index, region))).join('')}</div>${process.status === 'running' ? `<div class="structure-list" aria-label="PID ${process.pid} scene parts">${structureButtons(state, process.pid)}</div>` : ''}</div>`).join('')}</div><div class="flat-title">PHYSICAL FRAMES</div><div class="flat-frames">${state.frames.map(frame => `<button type="button" data-frame="${frame.id}" class="flat-frame ${selectedFrame === frame.id ? 'selected' : ''}"><strong>F${frame.id}</strong><span>${escapeHtml(frame.region)}</span><small>${sharers(state, frame.id)} ${sharers(state, frame.id) === 1 ? 'mapping' : 'mappings'}</small></button>`).join('')}</div><div class="flat-title">KERNEL OBJECTS</div><div class="flat-frames">${state.kernelObjects.map(object => `<button type="button" data-object="${escapeHtml(object.id)}" class="flat-frame ${selectedObjectId === object.id ? 'selected' : ''}"><strong>${escapeHtml(object.kind)}</strong><span>${escapeHtml(object.id)}</span><small>${objectRefCount(state, object.id)} descriptor(s)${object.kind === 'file' ? ` · offset ${object.offset}` : ''}</small></button>`).join('')}</div><p class="flat-note">Select a page to trace its mapping. A dash marks a page that is mapped but not resident. Shared frames have multiple mappings; descriptors can refer to one kernel object.</p>`;
+  root.querySelector('#flat-host')!.innerHTML = `<div class="flat-title">PROCESS ADDRESS SPACES</div><div class="flat-processes">${state.processes.map(process => `<div class="flat-process ${selectedPid === process.pid && selectedPage === null && selectedStructure === null && selectedFrame === null && selectedObjectId === null ? 'selected' : ''}"><button type="button" data-pid="${process.pid}"><strong>${process.role.toUpperCase()} · PID ${process.pid}</strong><span>${process.status === 'zombie' ? 'ZOMBIE · mappings released' : `PPID ${process.parentPid ?? '—'} · ${residentPages(process)} of ${mappedPages(process)} pages resident · ${process.threadIds.length} thread(s)`}</span>${showAccounting && process.status === 'running' ? `<span class="flat-accounting">${accountingLabel(state, process.pid)}</span>` : ''}</button><div class="page-strip">${process.regions.flatMap(region => regionPages(region).map(index => chip(process, index, region))).join('')}</div>${process.status === 'running' ? `<div class="structure-list" aria-label="PID ${process.pid} scene parts">${structureButtons(state, process.pid)}</div>` : ''}</div>`).join('')}</div><div class="flat-title">PHYSICAL FRAMES</div><div class="flat-frames">${state.frames.map(frame => `<button type="button" data-frame="${frame.id}" class="flat-frame ${selectedFrame === frame.id ? 'selected' : frame.id === frameTrace ? 'is-linked' : ''}"><strong>F${frame.id}</strong><span>${escapeHtml(frame.region)}</span><small>${sharers(state, frame.id)} ${sharers(state, frame.id) === 1 ? 'mapping' : 'mappings'}</small></button>`).join('')}</div><div class="flat-title">KERNEL OBJECTS</div><div class="flat-frames">${state.kernelObjects.map(object => `<button type="button" data-object="${escapeHtml(object.id)}" class="flat-frame ${selectedObjectId === object.id ? 'selected' : object.id === objectTrace ? 'is-linked' : ''}"><strong>${escapeHtml(object.kind)}</strong><span>${escapeHtml(object.id)}</span><small>${objectRefCount(state, object.id)} descriptor(s)${object.kind === 'file' ? ` · offset ${object.offset}` : ''}</small></button>`).join('')}</div><p class="flat-note">Select a page to find its frame, or a frame to find every page mapped to it. A dash marks a page that is mapped but not resident. Descriptors in several processes can refer to one kernel object.</p>`;
 }
 
 function structureButtons(state: WorldState, pid: number): string {
   const process = state.processes.find(item => item.pid === pid);
   if (!process || process.status !== 'running') return '';
-  const button = (part: StructurePart, index: number, label: string) => `<button type="button" data-structure="${part}" data-structure-pid="${pid}" data-structure-index="${index}" aria-label="Inspect PID ${pid} ${escapeHtml(label)}">${escapeHtml(label)}</button>`;
-  return button('page_table', 0, 'Page-table sheet') + process.descriptors.map((fd, index) => button('cable', index, `fd ${fd.fd} cable`)).join('') + process.threadIds.map((tid, index) => button('thread', index, `Thread ${tid} spindle`)).join('') + (state.processes.length > 1 ? button('stack', 0, 'Fork stack blocks') : '');
+  const objectTrace = tracedObject(state);
+  const button = (part: StructurePart, index: number, label: string, linked = false) => `<button type="button" class="${selectedStructure?.pid === pid && selectedStructure.part === part && selectedStructure.index === index ? 'selected' : linked ? 'is-linked' : ''}" data-structure="${part}" data-structure-pid="${pid}" data-structure-index="${index}" aria-label="Inspect PID ${pid} ${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+  return button('page_table', 0, 'Page-table sheet') + process.descriptors.map((fd, index) => button('cable', index, `fd ${fd.fd} cable`, fd.objectId === objectTrace)).join('') + process.threadIds.map((tid, index) => button('thread', index, `Thread ${tid} spindle`)).join('') + (state.processes.length > 1 ? button('stack', 0, 'Fork stack blocks') : '');
 }
 
-function pageInspector(state: WorldState, process: ProcessState, page: number, region: RegionState) {
+// What the inspector, and the selection card over the scene, say about the current selection.
+type Detail = { title: string; summary: string; metaphor: string; mechanism: string; measurement: string; actions?: string };
+const rung = (name: string, body: string) => `<div class="inspector-rung"><span>${name}</span>${body}</div>`;
+
+function pageDetail(state: WorldState, process: ProcessState, page: number, region: RegionState): Detail {
   const frameId = process.pages[page] ?? null;
   const frame = frameId === null ? null : state.frames.find(item => item.id === frameId) ?? null;
   const count = frame ? sharers(state, frame.id) : 0;
@@ -329,7 +348,13 @@ function pageInspector(state: WorldState, process: ProcessState, page: number, r
     : region.sharing === 'shared' ? 'A write changes the shared page in place, and every mapper sees it.'
     : !frame ? region.kind === 'anonymous' ? 'A write would allocate a zeroed private frame, adding 4 KiB to RSS.' : 'A write would copy the file page into a private frame.'
     : frame.kind === 'file' || count > 1 ? 'A write causes a copy-on-write fault: this process gets a private copy, and its RSS stays the same.' : 'A write reuses this exclusive frame.';
-  return `<h2>Virtual page <em>${page}</em></h2><p>PID ${process.pid} → ${frame ? `frame F${frame.id}` : 'not resident'}</p><div class="inspector-rung"><span>METAPHOR</span><p>${frame ? `A tile on PID ${process.pid}'s deck; its filament points to the floor.` : 'A faint tile with no filament: the address is mapped, but no frame stands behind it yet.'}</p></div><div class="inspector-rung"><span>MECHANISM</span><p>${escapeHtml(region.name)} · ${region.kind} · ${region.sharing} · ${region.writable ? 'writable' : 'read-only'}. ${residency} ${nextWrite}</p><p>${accounting}</p>${frame ? `<p>Model write revision: ${frame.revision}.</p>` : ''}</div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/smaps: Rss, Private_Dirty · /proc/${process.pid}/pagemap</code><small>Residency per mapping is in smaps; the exact frame needs privileged pagemap access. This mapping is modeled.</small></div>${frame ? `<button type="button" data-frame="${frame.id}" class="subtle">Inspect frame F${frame.id}</button>` : ''}`;
+  return {
+    title: `Virtual page <em>${page}</em>`, summary: `PID ${process.pid} → ${frame ? `frame F${frame.id}` : 'not resident'}`,
+    metaphor: `<p>${frame ? `A tile on PID ${process.pid}'s deck. Its thin line runs to frame F${frame.id} on the floor: the page-table entry that maps this page.` : 'A faint tile with no line: the address is mapped, but no frame stands behind it yet.'}</p>`,
+    mechanism: `<p>${escapeHtml(region.name)} · ${region.kind} · ${region.sharing} · ${region.writable ? 'writable' : 'read-only'}. ${residency} ${nextWrite}</p><p>${accounting}</p>${frame ? `<p>Model write revision: ${frame.revision}.</p>` : ''}`,
+    measurement: `<code>/proc/${process.pid}/smaps: Rss, Private_Dirty · /proc/${process.pid}/pagemap</code><small>Residency per mapping is in smaps; the exact frame needs privileged pagemap access. This mapping is modeled.</small>`,
+    actions: frame ? `<button type="button" data-frame="${frame.id}" class="subtle">Inspect frame F${frame.id}</button>` : '',
+  };
 }
 
 function pssSentence(state: WorldState, process: ProcessState, rss: number, pss: number) {
@@ -339,7 +364,7 @@ function pssSentence(state: WorldState, process: ProcessState, rss: number, pss:
   return `RSS ${kb(rss)} counts ${kb(shared)} of shared pages in full. PSS ${kb(pss)} charges this process its share: ${split.shared.map(item => `${kb(item.bytes)} shared by ${item.sharers} → ${kb(item.bytes / item.sharers)}`).join('; ')}${split.exclusive ? `, plus ${kb(split.exclusive)} exclusive` : ''}.`;
 }
 
-function renderInspector(state: WorldState) {
+function selectionDetail(state: WorldState): Detail {
   const frame = selectedFrame === null ? null : state.frames.find(f => f.id === selectedFrame);
   const process = state.processes.find(p => p.pid === selectedPid) || state.processes[0];
   const page = selectedPage?.pid === process?.pid ? selectedPage.page : null;
@@ -348,23 +373,38 @@ function renderInspector(state: WorldState) {
   const object = selectedObjectId === null ? null : state.kernelObjects.find(item => item.id === selectedObjectId);
   const objectDescriptors = object ? state.processes.flatMap(p => p.descriptors.filter(fd => fd.objectId === object.id).map(fd => `PID ${p.pid} fd ${fd.fd}`)) : [];
   const structure = selectedStructure?.pid === process.pid ? selectedStructure : null;
-  const structureBody = structure ? (() => {
+  if (structure) {
     const fd = process.descriptors[structure.index], tid = process.threadIds[structure.index];
-    if (structure.part === 'cable' && fd) return `<h2>Descriptor cable</h2><p>PID ${process.pid} fd ${fd.fd} → ${escapeHtml(fd.objectId)}</p><div class="inspector-rung"><span>METAPHOR</span><p>A cable joins a process port to a kernel object.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>The descriptor table holds a reference. Fork copies the table entries, so both processes can refer to the same open object and file offset.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/fd/${fd.fd} · fdinfo/${fd.fd}</code><small>The cable and object ID are modeled.</small></div>`;
-    if (structure.part === 'thread' && tid !== undefined) return `<h2>Thread spindle</h2><p>PID ${process.pid} · TID ${tid}</p><div class="inspector-rung"><span>METAPHOR</span><p>One spindle marks one thread on this deck.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Only the thread that calls fork survives in the child. Other thread-held locks may stay held in the copied address space.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/task</code><small>Thread IDs and locks here are model data.</small></div>`;
-    if (structure.part === 'stack' && state.processes.length > 1) return `<h2>Fork stack blocks</h2><p>PID ${process.pid} · modeled call stack</p><div class="inspector-rung"><span>METAPHOR</span><p>Stacked blocks stand beside each deck after fork.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Both processes resume from the same fork() call. ${process.role === 'master' ? 'The parent receives the child PID.' : 'The child receives 0.'} Their stacks can diverge after returning.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>strace -f -e clone,fork,wait4 · /proc/${process.pid}/stack</code><small>The blocks are schematic; user stacks require a debugger or profiler.</small></div>`;
-    if (structure.part === 'page_table') return `<h2>Page-table sheet</h2><p>PID ${process.pid} · ${kb(pageTableKiB(state, process))} model charge</p><div class="inspector-rung"><span>METAPHOR</span><p>A thin sheet below the process deck routes virtual pages to frames.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Fork creates a separate page table for the child. It copies entries for anonymous memory, so those frames stay shared, and skips file pages that were never written; they fault back in on first use. This model charges one root and one leaf per occupied group of 512 resident pages.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/${process.pid}/status: VmPTE · /proc/${process.pid}/maps</code><small>VmPTE covers the whole process. Three Linux VM runs showed a 0–8 KiB parent increase after mapping 16–1,024 pages. This sheet and its charge are illustrative.</small></div>`;
-    return '';
-  })() : '';
+    if (structure.part === 'cable' && fd) return { title: 'Descriptor cable', summary: `PID ${process.pid} fd ${fd.fd} → ${escapeHtml(fd.objectId)}`, metaphor: '<p>A thick cable from a port on the deck to a kernel object. The thin lines are page mappings, not descriptors.</p>', mechanism: '<p>The descriptor table holds a reference. Fork copies the table entries, so both processes can refer to the same open object and file offset.</p>', measurement: `<code>/proc/${process.pid}/fd/${fd.fd} · fdinfo/${fd.fd}</code><small>The cable and object ID are modeled.</small>` };
+    if (structure.part === 'thread' && tid !== undefined) return { title: 'Thread spindle', summary: `PID ${process.pid} · TID ${tid}`, metaphor: '<p>One spindle marks one thread on this deck.</p>', mechanism: '<p>Only the thread that calls fork survives in the child. Other thread-held locks may stay held in the copied address space.</p>', measurement: `<code>/proc/${process.pid}/task</code><small>Thread IDs and locks here are model data.</small>` };
+    if (structure.part === 'stack' && state.processes.length > 1) return { title: 'Fork stack blocks', summary: `PID ${process.pid} · modeled call stack`, metaphor: '<p>Stacked blocks stand beside each deck after fork.</p>', mechanism: `<p>Both processes resume from the same fork() call. ${process.role === 'master' ? 'The parent receives the child PID.' : 'The child receives 0.'} Their stacks can diverge after returning.</p>`, measurement: `<code>strace -f -e clone,fork,wait4 · /proc/${process.pid}/stack</code><small>The blocks are schematic; user stacks require a debugger or profiler.</small>` };
+    if (structure.part === 'page_table') return { title: 'Page-table sheet', summary: `PID ${process.pid} · ${kb(pageTableKiB(state, process))} model charge`, metaphor: '<p>A thin sheet below the process deck routes virtual pages to frames.</p>', mechanism: '<p>Fork creates a separate page table for the child. It copies entries for anonymous memory, so those frames stay shared, and skips file pages that were never written; they fault back in on first use. This model charges one root and one leaf per occupied group of 512 resident pages.</p>', measurement: `<code>/proc/${process.pid}/status: VmPTE · /proc/${process.pid}/maps</code><small>VmPTE covers the whole process. Three Linux VM runs showed a 0–8 KiB parent increase after mapping 16–1,024 pages. This sheet and its charge are illustrative.</small>` };
+  }
+  if (object) return { title: `${escapeHtml(object.kind)} <em>${escapeHtml(object.id)}</em>`, summary: `${objectRefCount(state, object.id)} descriptor(s) point here`, metaphor: '<p>A buoy in the kernel layer with cables from process decks.</p>', mechanism: `<p>${objectDescriptors.join(' · ')}. ${object.kind === 'file' ? `Shared file offset: ${object.offset} bytes.` : 'One listening socket is shared.'}</p>`, measurement: '<code>/proc/&lt;pid&gt;/fd · ss -lnp</code><small>Object identity and offset shown here are modeled.</small>' };
+  if (frame) return { title: `Frame F${frame.id}`, summary: `${escapeHtml(frame.region)} · ${frame.kind} · ${sharers(state, frame.id)} mapping(s)`, metaphor: '<p>A tile on the memory floor. Each thin line that lands on it is one page mapped to it.</p>', mechanism: `<p>${frameMappings.join(' · ')}. Model write revision: ${frame.revision}. ${frame.fileKey ? `Page-cache key: ${escapeHtml(frame.fileKey)}.` : 'Anonymous data frame.'}</p>`, measurement: '<code>/proc/&lt;pid&gt;/pagemap · /proc/kpagecount</code><small>Exact frame identity often needs privilege. This frame ID is modeled.</small>' };
+  if (page !== null && region) return pageDetail(state, process, page, region);
   const row = memoryRows(state).find(item => item.pid === process.pid);
-  const body = structureBody || (object
-    ? `<h2>${escapeHtml(object.kind)} <em>${escapeHtml(object.id)}</em></h2><p>${objectRefCount(state, object.id)} descriptor(s) point here</p><div class="inspector-rung"><span>METAPHOR</span><p>A buoy in the kernel layer with cables from process decks.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>${objectDescriptors.join(' · ')}. ${object.kind === 'file' ? `Shared file offset: ${object.offset} bytes.` : 'One listening socket is shared.'}</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/&lt;pid&gt;/fd · ss -lnp</code><small>Object identity and offset shown here are modeled.</small></div>`
-    : frame
-    ? `<h2>Frame F${frame.id}</h2><p>${escapeHtml(frame.region)} · ${frame.kind} · ${sharers(state, frame.id)} mapping(s)</p><div class="inspector-rung"><span>METAPHOR</span><p>A tile on the memory floor.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>${frameMappings.join(' · ')}. Model write revision: ${frame.revision}. ${frame.fileKey ? `Page-cache key: ${escapeHtml(frame.fileKey)}.` : 'Anonymous data frame.'}</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>/proc/&lt;pid&gt;/pagemap · /proc/kpagecount</code><small>Exact frame identity often needs privilege. This frame ID is modeled.</small></div>`
-    : page !== null && region
-      ? pageInspector(state, process, page, region)
-      : `<h2>${process.role === 'master' ? 'Master' : 'Worker'} <em>PID ${process.pid}</em></h2><p>${process.status === 'zombie' ? 'Exited · awaiting reaping' : `${residentPages(process)} of ${mappedPages(process)} mapped pages resident · ${process.threadIds.length} thread(s)`}</p><div class="inspector-rung"><span>METAPHOR</span><p>A deck with page tiles and descriptor ports. Faint tiles are mapped but not resident.</p></div><div class="inspector-rung"><span>MECHANISM</span><p>Address space: ${process.regions.map(r => `${escapeHtml(r.name)} (${regionPages(r).filter(index => process.pages[index] != null).length}/${r.pageCount} resident)`).join(', ') || 'released'}. Page tables: ${kb(pageTableKiB(state, process))}.</p>${row ? `<p>Mapped ${kb(row.mapped)} · RSS ${kb(row.rss)} (file ${kb(row.rssFile)}) · PSS ${kb(row.pss)} · USS ${kb(row.uss)}.</p>` : ''}${row && process.status === 'running' ? `<p>${pssSentence(state, process, row.rss, row.pss)}</p>` : ''}<p>Descriptors: ${process.descriptors.map(fd => { const object = state.kernelObjects.find(o => o.id === fd.objectId)!; return `fd ${fd.fd} → ${escapeHtml(object.id)} (${object.kind}, ${objectRefCount(state, object.id)} refs${object.kind === 'file' ? `, offset ${object.offset}` : ''})`; }).join('; ') || 'none'}.</p><p>Threads: ${process.threadIds.join(', ') || 'none'}. Locks: ${process.locks.map(lock => `${escapeHtml(lock.id)} → ${lock.ownerTid ?? 'free'}${lock.ownerTid !== null && !process.threadIds.includes(lock.ownerTid) ? ' (owner absent after fork)' : ''}`).join('; ') || 'none'}.</p></div><div class="inspector-rung"><span>MEASUREMENT</span><code>ps · /proc/${process.pid}/status: VmSize, VmRSS, RssFile · smaps_rollup · fd · task</code><small>All values shown here are model data.</small></div><div class="structure-list" aria-label="Inspect scene parts">${structureButtons(state, process.pid)}</div>`);
-  root.querySelector('#inspector')!.innerHTML = `<div class="inspector-content">${body}<button id="clear-selection" type="button" class="subtle" ${object || frame || page !== null || structure ? '' : 'hidden'}>← Process</button></div>`;
+  return {
+    title: `${process.role === 'master' ? 'Master' : 'Worker'} <em>PID ${process.pid}</em>`,
+    summary: process.status === 'zombie' ? 'Exited · awaiting reaping' : `${residentPages(process)} of ${mappedPages(process)} mapped pages resident · ${process.threadIds.length} thread(s)`,
+    metaphor: '<p>A deck with page tiles and descriptor ports. Faint tiles are mapped but not resident.</p>',
+    mechanism: `<p>Address space: ${process.regions.map(r => `${escapeHtml(r.name)} (${regionPages(r).filter(index => process.pages[index] != null).length}/${r.pageCount} resident)`).join(', ') || 'released'}. Page tables: ${kb(pageTableKiB(state, process))}.</p>${row ? `<p>Mapped ${kb(row.mapped)} · RSS ${kb(row.rss)} (file ${kb(row.rssFile)}) · PSS ${kb(row.pss)} · USS ${kb(row.uss)}.</p>` : ''}${row && process.status === 'running' ? `<p>${pssSentence(state, process, row.rss, row.pss)}</p>` : ''}<p>Descriptors: ${process.descriptors.map(fd => { const object = state.kernelObjects.find(o => o.id === fd.objectId)!; return `fd ${fd.fd} → ${escapeHtml(object.id)} (${object.kind}, ${objectRefCount(state, object.id)} refs${object.kind === 'file' ? `, offset ${object.offset}` : ''})`; }).join('; ') || 'none'}.</p><p>Threads: ${process.threadIds.join(', ') || 'none'}. Locks: ${process.locks.map(lock => `${escapeHtml(lock.id)} → ${lock.ownerTid ?? 'free'}${lock.ownerTid !== null && !process.threadIds.includes(lock.ownerTid) ? ' (owner absent after fork)' : ''}`).join('; ') || 'none'}.</p>`,
+    measurement: `<code>ps · /proc/${process.pid}/status: VmSize, VmRSS, RssFile · smaps_rollup · fd · task</code><small>All values shown here are model data.</small>`,
+    actions: `<div class="structure-list" aria-label="Inspect scene parts">${structureButtons(state, process.pid)}</div>`,
+  };
+}
+
+function renderInspector(detail: Detail) {
+  const nested = selectedFrame !== null || selectedObjectId !== null || selectedPage?.pid === selectedPid || selectedStructure?.pid === selectedPid;
+  root.querySelector('#inspector')!.innerHTML = `<div class="inspector-content"><h2>${detail.title}</h2><p>${detail.summary}</p>${rung('METAPHOR', detail.metaphor)}${rung('MECHANISM', detail.mechanism)}${rung('MEASUREMENT', detail.measurement)}${detail.actions ?? ''}<button id="clear-selection" type="button" class="subtle" ${nested ? '' : 'hidden'}>← Process</button></div>`;
+}
+
+// The card keeps a selection's explanation beside the scene while the scenario panel stays open. Only changed text is written, so the live region announces each new selection once.
+const shownSelection = { heading: '', mechanism: '' };
+function renderSelectionCard(detail: Detail) {
+  const heading = `<h2>${detail.title}</h2><p class="selection-summary">${detail.summary}</p>`;
+  if (shownSelection.heading !== heading) root.querySelector('#selection-card-heading')!.innerHTML = shownSelection.heading = heading;
+  if (shownSelection.mechanism !== detail.mechanism) root.querySelector('#selection-card-detail')!.innerHTML = shownSelection.mechanism = detail.mechanism;
 }
 
 function renderLedger(state: WorldState) {
@@ -405,7 +445,8 @@ function render() {
       || selectedStructure.part === 'thread' && process.threadIds[selectedStructure.index] === undefined
       || selectedStructure.part === 'stack' && state.processes.length < 2) selectedStructure = null;
   }
-  renderChrome(); renderScenarioPanel(); renderFlat(state); renderInspector(state); renderLedger(state); renderTimeline(state);
+  const detail = selectionDetail(state);
+  renderChrome(); renderScenarioPanel(); renderFlat(state); renderInspector(detail); renderSelectionCard(detail); renderLedger(state); renderTimeline(state);
   host.hidden = flat;
   (root.querySelector('#flat-host') as HTMLElement).hidden = !flat;
   root.querySelector('#view-toggle')!.textContent = flat ? '◈ 3D view' : '▦ Flat view';
@@ -425,6 +466,7 @@ function selectVisual(selection: SceneSelection) {
   selectedStructure = selection.kind === 'structure' ? { pid: selection.pid, part: selection.part, index: selection.index } : null;
   if (selection.kind === 'process' || selection.kind === 'page' || selection.kind === 'structure') selectedPid = selection.pid;
   selectedPage = selection.kind === 'page' ? { pid: selection.pid, page: selection.page } : null;
+  selectionCardOpen = true;
   render();
 }
 
@@ -451,6 +493,8 @@ root.addEventListener('click', event => {
   const panelItem = target.closest<HTMLElement>('[data-panel]');
   if (panelItem) { const id = panelItem.dataset.panel as PanelId; showPanel(openPanel === id ? null : id); return; }
   if (target.closest('[data-close-panel]')) { showPanel(null); return; }
+  if (target.closest('#close-selection-card')) { selectionCardOpen = false; renderChrome(); return; }
+  if (target.closest('#open-inspector')) { showPanel('inspector'); return; }
   if (menuOpen && !target.closest('.menu-dock')) { menuOpen = false; renderChrome(); }
   const camera = target.closest<HTMLElement>('[data-camera]');
   if (camera) { scene?.setCameraPreset(camera.dataset.camera as 'overview' | 'process' | 'memory'); return; }
@@ -479,7 +523,7 @@ root.addEventListener('click', event => {
   if (structureButton) { selectVisual({ kind: 'structure', pid: Number(structureButton.dataset.structurePid), part: structureButton.dataset.structure as StructurePart, index: Number(structureButton.dataset.structureIndex) }); return; }
   if (target.closest('#prev-step')) { goToStep(step - 1); return; }
   if (target.closest('#next-step')) { goToStep(step + 1); return; }
-  if (target.closest('#reset-model')) { resetSandbox(initialWorld(), null); selectedPid = 4100; clearSelection(); render(); return; }
+  if (target.closest('#reset-model')) { resetSandbox(initialWorld(), null); selectedPid = 4100; clearSelection(); selectionCardOpen = false; render(); return; }
   if (target.closest('#clear-selection')) { clearSelection(); render(); return; }
   const actionButton = target.closest<HTMLElement>('[data-lab]');
   if (actionButton && !actionButton.hasAttribute('disabled') && mode.kind === 'sandbox') {
@@ -514,6 +558,7 @@ root.addEventListener('pointerout', event => {
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   if (menuOpen) { menuOpen = false; renderChrome(); root.querySelector<HTMLElement>('#menu-toggle')!.focus(); }
+  else if (selectionCardOpen && openPanel !== 'inspector') { selectionCardOpen = false; renderChrome(); }
   else if (openPanel) showPanel(null);
 });
 root.addEventListener('input', event => {
