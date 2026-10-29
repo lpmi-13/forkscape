@@ -55,12 +55,12 @@ async function clickMasterPage(page, flat, pageIndex) {
   assert.match(await page.locator('#inspector h2').textContent(), new RegExp(`Virtual page ${pageIndex}`));
 }
 
-const stepLabel = page => page.locator('.stepper-controls span').innerText();
+const stepLabel = page => page.locator('.step-count').innerText();
 // Links change the URL hash; the app re-renders on the following hashchange event.
 const heading = (page, text) => page.locator('#scenario-content h1', { hasText: text }).waitFor();
 const legend = page => page.locator('.chart-legend').innerText();
-// Where the chart and the first note sit; stepping must not move either.
-const layout = page => page.evaluate(() => ['.chart', '.scenario-note'].map(selector => document.querySelector(selector).getBoundingClientRect().top).join());
+// Where the chart and the first note sit in the panel; stepping must not move either. Measured from the panel's top, because Playwright may scroll the panel to reach a button.
+const layout = page => page.evaluate(() => { const panel = document.querySelector('[data-panel-id="scenarios"]'); return ['.chart', '.scenario-note'].map(selector => document.querySelector(selector).getBoundingClientRect().top + panel.scrollTop).join(); });
 // 3D decks and flat process cards both carry RSS and PSS while the comparison is shown.
 const deckAccounting = (page, flat, pid) => flat
   ? page.locator(`.flat-process:has([data-pid="${pid}"]) .flat-accounting`).innerText()
@@ -103,7 +103,7 @@ async function runJourneys(flat) {
   assert.match(await legend(page), /Worker 4101 RSS\s*40 KiB/);
   assert.match(await legend(page), /Worker 4101 PSS\s*32 KiB/);
   assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*72 KiB/);
-  assert.match(await page.locator('.accounting.key').innerText(), /Σ RSS\s*88 KiB\s*Σ PSS · IN USE\s*72 KiB\s*RSS OVERCOUNT\s*16 KiB/, 'the RSS vs PSS callout is shown where it is the point');
+  assert.match(await page.locator('.accounting.key').innerText(), /Σ RSS\s*88 KiB\s*Σ PSS · in use\s*72 KiB\s*RSS overcount\s*16 KiB/, 'the RSS vs PSS callout is shown where it is the point');
   assert.match(await deckAccounting(page, flat, 4101), /RSS 40 (KiB )?· PSS 32 KiB/);
   await page.locator('.acct-seg[data-page-pid="4100"][data-page="3"]').first().click();
   assert.match(await page.locator('#selection-card h2').innerText(), /Virtual page 3/);
@@ -156,7 +156,7 @@ async function runJourneys(flat) {
   await page.locator('[data-lab="fork"]').click();
   await openPanel(page, 'timeline');
   assert.equal(await page.locator('#step-label').innerText(), '2 / 2');
-  assert.equal(await page.locator('#event-count').innerText(), '2 STATES');
+  assert.equal(await page.locator('#event-count').innerText(), '2 states');
   await openPanel(page, 'scenarios');
   assert.equal(await page.locator('[data-lab="write"]').isDisabled(), true, 'the code page is read-only');
   await page.locator('[data-lab="read"]').click();

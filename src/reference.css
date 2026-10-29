@@ -4,14 +4,15 @@
   border: 1px solid #3b5364;
   border-radius: 5px;
   color: #9fb4c0;
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
 .reference-evidence summary {
   cursor: pointer;
+  padding: 4px 0;
   color: #b8d4d8;
-  font: 500 10px 'DM Mono', monospace;
+  font: 600 var(--text-sm) 'Fredoka', sans-serif;
 }
 
 .reference-evidence summary:focus-visible {

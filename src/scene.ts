@@ -54,6 +54,9 @@ export class ForkScene {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // The flat view is the text and keyboard equivalent of this canvas.
+    this.renderer.domElement.setAttribute('role', 'img');
+    this.renderer.domElement.setAttribute('aria-label', '3D scene of process decks, page tiles, physical frames, and kernel objects. Switch to the flat view to reach each one by keyboard.');
     host.appendChild(this.renderer.domElement);
     this.scene.fog = new THREE.Fog(0x1b1838, 15, 30);
     this.camera.position.set(9.5, 8.5, 13.5);
