@@ -8,6 +8,7 @@ await server.listen();
 const address = server.httpServer.address();
 assert.ok(address && typeof address !== 'string');
 const url = `http://127.0.0.1:${address.port}/`;
+const scenarioIds = ['cow-decay', 'leak', 'decay-oom', 'rss-overcount', 'worker-warmup', 'no-preload', 'shared-offset', 'thread-lock'];
 let browser;
 
 async function clickScenePoint(page, x, y, z) {
@@ -43,28 +44,36 @@ async function assertLabelsSeparate(page) {
   assert.deepEqual(hits, [], 'visible scene labels must not overlap');
 }
 
-async function clickPage(page, flat, pid, pageIndex) {
-  if (flat) {
-    await page.locator(`[data-page="${pageIndex}"][data-page-pid="${pid}"]`).click();
-    return;
-  }
-  const master = pid === 4100;
-  const x = master ? 0 : -3.05;
-  const y = master ? 4 : 3.15;
-  const z = master ? -2.25 : 2.15;
-  await clickScenePoint(page, x + (pageIndex % 6 - 2.5) * .79, y, z + (pageIndex < 6 ? -.45 : .45));
+// Mirrors deckTileOffset in src/scene.ts for a master deck with fewer than 13 mapped pages.
+async function clickMasterPage(page, flat, pageIndex) {
+  if (flat) await page.locator(`#flat-host [data-page="${pageIndex}"][data-page-pid="4100"]`).click();
+  else await clickScenePoint(page, (pageIndex % 6 - 2.5) * .79, 4, -2.25 + (pageIndex < 6 ? -.45 : .45));
+  await openPanel(page, 'inspector');
   assert.match(await page.locator('#inspector h2').textContent(), new RegExp(`Virtual page ${pageIndex}`));
 }
 
-async function runScenario(flat) {
+const stepLabel = page => page.locator('.stepper-controls span').innerText();
+// Links change the URL hash; the app re-renders on the following hashchange event.
+const heading = (page, text) => page.locator('#scenario-content h1', { hasText: text }).waitFor();
+const legend = page => page.locator('.chart-legend').innerText();
+// 3D decks and flat process cards both carry RSS and PSS while the comparison is shown.
+const deckAccounting = (page, flat, pid) => flat
+  ? page.locator(`.flat-process:has([data-pid="${pid}"]) .flat-accounting`).innerText()
+  : page.locator('.scene-label', { hasText: `PID ${pid}` }).textContent();
+
+async function runJourneys(flat) {
   const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.evaluate(value => localStorage.setItem('forkscape-flat', String(value)), flat);
   await page.reload();
-  assert.equal(await page.locator('#menu-toggle').getAttribute('aria-expanded'), 'false');
-  assert.equal(await page.locator('[data-panel-id]:visible').count(), 0, 'all panels start collapsed');
+
+  assert.equal(await page.locator('[data-panel-id="scenarios"]').isVisible(), true, 'the scenario library is open on arrival');
+  assert.equal(await page.locator('.scenario-card').count(), scenarioIds.length);
+  assert.equal(await page.locator('.sandbox-link').count(), 1, 'free exploration is offered after the scenarios');
+  assert.equal(await page.locator('.card-tag').count(), 5, 'scenarios that depend on RSS vs PSS are marked in the library');
   assert.equal(await page.locator('#view-toggle').isVisible(), true, 'view toggle stays outside the menu');
-  assert.equal(await page.locator('[data-panel="timeline"]').getAttribute('hidden'), '', 'timeline is not offered with a single state');
   if (flat) assert.equal(await page.locator('#flat-host').isVisible(), true);
   else {
     await page.locator('#scene-host canvas').waitFor();
@@ -74,99 +83,119 @@ async function runScenario(flat) {
     await openPanel(page, 'inspector');
     assert.match(await page.locator('#inspector h2').innerText(), /socket/);
     await page.locator('#clear-selection').click();
+    await openPanel(page, 'scenarios');
   }
-  await openPanel(page, 'ledger');
-  await page.locator('.reference-evidence summary').click();
-  assert.match(await page.locator('.reference-evidence').innerText(), /VmPTE.*0–8 KiB/s);
-  assert.equal(await page.locator('.reference-evidence').getAttribute('open'), '');
-  const complete = async id => assert.match(await page.locator(`[data-module="${id}"]`).getAttribute('aria-label'), /complete$/);
-  const predict = async choice => {
-    await page.locator(`#prediction-form input[value="${choice}"]`).check();
-    await page.locator('#prediction-form button[type="submit"]').click();
-  };
 
-  await openPanel(page, 'lesson');
-  await predict(1);
-  for (const [name, owner] of Object.entries({ pid: 'process', address: 'process', descriptors: 'process', threads: 'process', socket: 'kernel', file: 'kernel' })) {
-    await page.locator(`#classification-form select[name="${name}"]`).selectOption(owner);
-  }
-  await page.locator('#classification-form button[type="submit"]').click();
-  await complete(1);
-
-  await page.locator('[data-module="2"]').click();
-  await predict(1);
-  for (let index = 0; index < 6; index++) await page.locator('#walk-next').click();
-  await complete(2);
-
-  await page.locator('[data-module="3"]').click();
-  await predict(1);
-  await page.locator('#reset-model').click();
-  await page.locator('[data-lab="fork"]').click();
-  await clickPage(page, flat, 4100, 2);
-  await clickPage(page, flat, 4101, 2);
-  await page.locator('[data-lab="write"]').click();
-  await clickPage(page, flat, 4100, 2);
-  await clickPage(page, flat, 4101, 2);
-  await complete(3);
-
-  await page.locator('[data-module="4"]').click();
-  await predict(1);
-  await page.locator('#size-form button[type="submit"]').click();
-  await page.locator('#show-event').click();
-  await complete(4);
+  await page.locator('.scenario-card[href="#cow-decay"]').click();
+  await heading(page, 'Memory climbs while RSS stays flat');
+  assert.equal(await stepLabel(page), 'STEP 1 / 9');
+  assert.match(await legend(page), /Worker 4101 RSS\s*—/);
+  for (let index = 1; index < 9; index++) await page.locator('#scenario-next').click();
+  assert.equal(await stepLabel(page), 'STEP 9 / 9');
+  assert.equal(await page.locator('#scenario-next').isDisabled(), true);
+  assert.match(await legend(page), /Worker 4101 RSS\s*40 KiB/);
+  assert.match(await legend(page), /Worker 4101 PSS\s*32 KiB/);
+  assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*72 KiB/);
+  assert.match(await page.locator('.accounting.key').innerText(), /Σ RSS\s*88 KiB\s*Σ PSS · IN USE\s*72 KiB\s*RSS OVERCOUNT\s*16 KiB/, 'the RSS vs PSS callout is shown where it is the point');
+  assert.match(await deckAccounting(page, flat, 4101), /RSS 40 (KiB )?· PSS 32 KiB/);
+  await page.locator('.acct-seg[data-page-pid="4100"][data-page="3"]').first().click();
+  await openPanel(page, 'inspector');
+  assert.match(await page.locator('#inspector h2').innerText(), /Virtual page 3/, 'a comparison segment selects its page');
+  assert.match(await page.locator('#inspector').innerText(), /RSS counts it as 4 KiB in each of the 2 mappings; PSS charges each one 2 KiB/);
+  await page.locator('#clear-selection').click();
+  assert.match(await page.locator('#inspector').innerText(), /PSS 40 KiB charges this process its share/);
+  await openPanel(page, 'scenarios');
+  await page.locator('[data-chart-step="4"]').click({ force: true });
+  assert.equal(await stepLabel(page), 'STEP 5 / 9');
+  assert.match(await page.locator('.step-event').innerText(), /RSS is unchanged/);
   if (!flat) await assertLabelsSeparate(page);
 
-  await page.locator('[data-module="case"]').click();
-  await page.locator('#case-prediction-form input[value="1"]').check();
-  await page.locator('#case-prediction-form button[type="submit"]').click();
-  await page.locator('[data-case-kind="decay"][data-case-step="16"]').click();
-  if (flat) {
-    await clickPage(page, true, 4101, 6);
-    await page.locator('[data-case-kind="decay"][data-case-step="20"]').click();
-    assert.match(await page.locator('#inspector h2').textContent(), /Virtual page 6/);
-  }
-  await page.locator('[data-case-kind="leak"][data-case-step="16"]').click();
-  await page.locator('#case-links-form select[name="decay"]').selectOption('decay');
-  await page.locator('#case-links-form select[name="leak"]').selectOption('leak');
-  await page.locator('#case-links-form select[name="evidence"]').selectOption('trend');
-  await page.locator('#case-links-form button[type="submit"]').click();
-  await complete('case');
-
+  await openPanel(page, 'inspector');
+  assert.match(await page.locator('#inspector h2').innerText(), /Virtual page 8/, 'each step points the inspector at the page it touched');
+  assert.match(await page.locator('#inspector').innerText(), /exclusive frame/);
   await openPanel(page, 'ledger');
   const ledger = await page.locator('#ledger').innerText();
+  assert.match(ledger, /MAPPED\s+RSS\s+PSS\s+USS/);
+  await page.locator('#ledger + .reference-evidence summary').click();
+  assert.match(await page.locator('#ledger + .reference-evidence').innerText(), /Django 6\.1 .*Σ RSS 259\.8–259\.9 MiB/);
   await openPanel(page, 'timeline');
-  const event = await page.locator('#step-label').innerText();
+  assert.equal(await page.locator('#step-label').innerText(), 'STEP 5 / 9');
+  await page.locator('#next-step').click();
+  assert.equal(await page.locator('#step-label').innerText(), 'STEP 6 / 9');
+  await page.locator('#prev-step').click();
+
   await page.locator('#view-toggle').click();
   if (flat) await page.locator('#scene-host canvas').waitFor();
   else assert.equal(await page.locator('#flat-host').isVisible(), true);
   await openPanel(page, 'ledger');
   assert.equal(await page.locator('#ledger').innerText(), ledger);
-  assert.equal(await page.locator('.reference-evidence').getAttribute('open'), '');
+  assert.equal(await page.locator('#ledger + .reference-evidence').getAttribute('open'), '');
   await openPanel(page, 'timeline');
-  assert.equal(await page.locator('#step-label').innerText(), event);
+  assert.equal(await page.locator('#step-label').innerText(), 'STEP 5 / 9');
+  await page.locator('#view-toggle').click();
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('[data-panel-id]:visible').count(), 0, 'Escape closes the open panel');
 
-  await page.reload();
-  for (const id of [1, 2, 3, 4, 'case']) await complete(id);
+  await openPanel(page, 'scenarios');
+  await page.locator('#explore-here').click();
+  await heading(page, 'Change the model yourself');
+  assert.match(await page.locator('#scenario-content').innerText(), /Started from step 5 of Memory climbs while RSS stays flat/);
+  await clickMasterPage(page, flat, 0);
+  await openPanel(page, 'scenarios');
+  await page.locator('[data-lab="fork"]').click();
+  await openPanel(page, 'timeline');
+  assert.equal(await page.locator('#step-label').innerText(), '2 / 2');
+  assert.equal(await page.locator('#event-count').innerText(), '2 STATES');
+  await openPanel(page, 'scenarios');
+  assert.equal(await page.locator('[data-lab="write"]').isDisabled(), true, 'the code page is read-only');
+  await page.locator('[data-lab="read"]').click();
+  assert.match(await page.locator('#scenario-content').innerText(), /PID 4100 reads virtual page 0/);
+  assert.equal(await page.locator('details.accounting:not([open])').count(), 1, 'free exploration offers the comparison on request');
+
+  await page.goBack();
+  await heading(page, 'Memory climbs while RSS stays flat');
+  await page.locator('.back-link').click();
+  await heading(page, 'Fork and memory problems, replayed');
+  assert.equal(await page.locator('.scenario-card').count(), scenarioIds.length);
+
+  await page.locator('.scenario-card[href="#leak"]').click();
+  await heading(page, 'A leak grows without limit');
+  assert.equal(await page.locator('details.accounting:not([open])').count(), 1, 'where RSS and PSS agree, the comparison starts closed');
+  await page.locator('details.accounting summary').click();
+  await page.locator('#scenario-next').click();
+  assert.equal(await page.locator('details.accounting[open]').count(), 1, 'the comparison stays open while stepping');
+  assert.match(await deckAccounting(page, flat, 4101), /RSS 40 (KiB )?· PSS 20 KiB/);
+  await page.locator('details.accounting summary').click();
+
+  await page.goto(`${url}#no-preload`);
+  await page.locator('.contrast').waitFor();
+  assert.match(await page.locator('.contrast').innerText(), /With preload\s*108 KiB higher\s*36 KiB\s*Without preload\s*96 KiB\s*48 KiB higher/, 'Σ RSS and Σ PSS rank preload opposite ways');
+
+  for (const id of scenarioIds) {
+    await page.goto(`${url}#${id}`);
+    await page.locator('#scenario-prev').waitFor();
+    const total = Number((await stepLabel(page)).split('/ ')[1]);
+    for (let index = 1; index < total; index++) await page.locator('#scenario-next').click();
+    assert.equal(await stepLabel(page), `STEP ${total} / ${total}`, `${id} reaches its last step`);
+  }
+  assert.deepEqual(errors, []);
   await page.close();
-  console.log(`${flat ? 'Flat' : '3D'} mode completed Modules 1–4 and the case; view switch and saved progress passed.`);
+  console.log(`${flat ? 'Flat' : '3D'} mode stepped through all ${scenarioIds.length} scenarios; chart, RSS/PSS comparison, panels, view switch, and free exploration passed.`);
 }
 
 async function runPhoneCheck() {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
-  await page.goto(url);
+  await page.goto(`${url}#decay-oom`);
   await page.locator('#scene-host canvas').waitFor();
   const [canvas, host] = await Promise.all([page.locator('#scene-host canvas').boundingBox(), page.locator('#scene-host').boundingBox()]);
   assert.deepEqual([canvas.width, canvas.height], [host.width, host.height], 'the canvas fills the scene on high-DPI screens');
-  await assertLabelsSeparate(page);
-  await page.locator('#menu-toggle').click();
-  await page.locator('[data-panel="lesson"]').click();
-  const [panel, scene] = await Promise.all([page.locator('[data-panel-id="lesson"]').boundingBox(), page.locator('#scene-host').boundingBox()]);
-  assert.ok(panel.y + panel.height <= scene.y + 1, 'on phones the open panel sits above the scene');
+  const [panel, scene] = await Promise.all([page.locator('[data-panel-id="scenarios"]').boundingBox(), page.locator('#scene-host').boundingBox()]);
+  assert.ok(panel.y + panel.height <= scene.y + 1, 'on phones the scenario panel sits above the scene');
+  assert.ok(await page.locator('[data-panel-id="scenarios"]').evaluate(element => element.scrollWidth <= element.clientWidth), 'the scenario panel does not scroll sideways');
+  for (let index = 0; index < 6; index++) await page.locator('#scenario-next').click();
   await assertLabelsSeparate(page);
   await page.close();
-  console.log('Phone layout kept the canvas sized to the scene, labels apart, and the panel above the scene.');
+  console.log('Phone layout kept the canvas sized to the scene, labels apart, and the scenario panel above the scene without sideways scrolling.');
 }
 
 try {
@@ -175,8 +204,8 @@ try {
     headless: true,
     args: ['--no-sandbox', '--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
   });
-  await runScenario(true);
-  await runScenario(false);
+  await runJourneys(true);
+  await runJourneys(false);
   await runPhoneCheck();
 } finally {
   await browser?.close();

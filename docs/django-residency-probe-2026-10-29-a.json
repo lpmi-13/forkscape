@@ -1,0 +1,982 @@
+{
+  "schema_version": 1,
+  "source": "reference_linux_vm",
+  "captured_at": "2026-10-29T20:50:20.889492+00:00",
+  "distribution": "Ubuntu 24.04.5 LTS",
+  "kernel": "6.1.167",
+  "python": "3.12.3",
+  "django": "6.1.2",
+  "gunicorn": "26.2.0",
+  "workers": 2,
+  "runs": [
+    {
+      "preload_app": true,
+      "warm_urlconf_in_master": false,
+      "master_pid": 1236,
+      "worker_pids": [
+        1237,
+        1238
+      ],
+      "hook_events": [
+        {
+          "event": "master_ready",
+          "pid": 1236,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_fork",
+          "pid": 1237,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_worker_init",
+          "pid": 1237,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_fork",
+          "pid": 1238,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_worker_init",
+          "pid": 1238,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        }
+      ],
+      "readings": {
+        "boot": {
+          "processes": {
+            "master": {
+              "pid": 1236,
+              "Rss_kib": 92544,
+              "Pss_kib": 32719,
+              "Pss_Anon_kib": 29909,
+              "Pss_File_kib": 2809,
+              "Shared_Clean_kib": 10968,
+              "Shared_Dirty_kib": 77048,
+              "Private_Clean_kib": 332,
+              "Private_Dirty_kib": 4196,
+              "Anonymous_kib": 81244,
+              "VmSize_kib": 173224,
+              "VmRSS_kib": 92532,
+              "RssAnon_kib": 81232,
+              "RssFile_kib": 11300,
+              "minflt": 23004,
+              "majflt": 2
+            },
+            "worker_1": {
+              "pid": 1237,
+              "Rss_kib": 86788,
+              "Pss_kib": 29906,
+              "Pss_Anon_kib": 28877,
+              "Pss_File_kib": 1028,
+              "Shared_Clean_kib": 5664,
+              "Shared_Dirty_kib": 78872,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 2252,
+              "Anonymous_kib": 81124,
+              "VmSize_kib": 99476,
+              "VmRSS_kib": 86308,
+              "RssAnon_kib": 81124,
+              "RssFile_kib": 5184,
+              "minflt": 592,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1238,
+              "Rss_kib": 86724,
+              "Pss_kib": 29806,
+              "Pss_Anon_kib": 28783,
+              "Pss_File_kib": 1022,
+              "Shared_Clean_kib": 5600,
+              "Shared_Dirty_kib": 79060,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 2064,
+              "Anonymous_kib": 81124,
+              "VmSize_kib": 99476,
+              "VmRSS_kib": 86372,
+              "RssAnon_kib": 81124,
+              "RssFile_kib": 5248,
+              "minflt": 587,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 266056,
+            "Pss_kib": 92431
+          }
+        },
+        "first_request": {
+          "served": {
+            "1237": 1,
+            "1238": 1
+          },
+          "processes": {
+            "master": {
+              "pid": 1236,
+              "Rss_kib": 92548,
+              "Pss_kib": 34635,
+              "Pss_Anon_kib": 31975,
+              "Pss_File_kib": 2660,
+              "Shared_Clean_kib": 10988,
+              "Shared_Dirty_kib": 73944,
+              "Private_Clean_kib": 312,
+              "Private_Dirty_kib": 7304,
+              "Anonymous_kib": 81248,
+              "VmSize_kib": 173224,
+              "VmRSS_kib": 92532,
+              "RssAnon_kib": 81232,
+              "RssFile_kib": 11300,
+              "minflt": 23016,
+              "majflt": 2
+            },
+            "worker_1": {
+              "pid": 1237,
+              "Rss_kib": 94340,
+              "Pss_kib": 39400,
+              "Pss_Anon_kib": 38241,
+              "Pss_File_kib": 1158,
+              "Shared_Clean_kib": 6300,
+              "Shared_Dirty_kib": 74996,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 13044,
+              "Anonymous_kib": 88040,
+              "VmSize_kib": 106644,
+              "VmRSS_kib": 94340,
+              "RssAnon_kib": 88040,
+              "RssFile_kib": 6300,
+              "minflt": 3330,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1238,
+              "Rss_kib": 94264,
+              "Pss_kib": 39319,
+              "Pss_Anon_kib": 38171,
+              "Pss_File_kib": 1148,
+              "Shared_Clean_kib": 6224,
+              "Shared_Dirty_kib": 75136,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 12904,
+              "Anonymous_kib": 88040,
+              "VmSize_kib": 106644,
+              "VmRSS_kib": 94264,
+              "RssAnon_kib": 88040,
+              "RssFile_kib": 6224,
+              "minflt": 3321,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 281152,
+            "Pss_kib": 113354
+          }
+        },
+        "catalog_scan": {
+          "served": {
+            "1237": 1,
+            "1238": 1
+          },
+          "processes": {
+            "master": {
+              "pid": 1236,
+              "Rss_kib": 92548,
+              "Pss_kib": 53473,
+              "Pss_Anon_kib": 50813,
+              "Pss_File_kib": 2660,
+              "Shared_Clean_kib": 10988,
+              "Shared_Dirty_kib": 45688,
+              "Private_Clean_kib": 312,
+              "Private_Dirty_kib": 35560,
+              "Anonymous_kib": 81248,
+              "VmSize_kib": 173224,
+              "VmRSS_kib": 92532,
+              "RssAnon_kib": 81232,
+              "RssFile_kib": 11300,
+              "minflt": 23016,
+              "majflt": 2
+            },
+            "worker_1": {
+              "pid": 1237,
+              "Rss_kib": 94340,
+              "Pss_kib": 58252,
+              "Pss_Anon_kib": 57093,
+              "Pss_File_kib": 1158,
+              "Shared_Clean_kib": 6300,
+              "Shared_Dirty_kib": 46712,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 41328,
+              "Anonymous_kib": 88040,
+              "VmSize_kib": 106644,
+              "VmRSS_kib": 94340,
+              "RssAnon_kib": 88040,
+              "RssFile_kib": 6300,
+              "minflt": 10401,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1238,
+              "Rss_kib": 94264,
+              "Pss_kib": 58169,
+              "Pss_Anon_kib": 57021,
+              "Pss_File_kib": 1148,
+              "Shared_Clean_kib": 6224,
+              "Shared_Dirty_kib": 46856,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 41184,
+              "Anonymous_kib": 88040,
+              "VmSize_kib": 106644,
+              "VmRSS_kib": 94264,
+              "RssAnon_kib": 88040,
+              "RssFile_kib": 6224,
+              "minflt": 10391,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 281152,
+            "Pss_kib": 169894
+          }
+        },
+        "retained_256_kib_objects": {
+          "retained": {
+            "1237": 29,
+            "1238": 11
+          },
+          "processes": {
+            "master": {
+              "pid": 1236,
+              "Rss_kib": 92548,
+              "Pss_kib": 53738,
+              "Pss_Anon_kib": 51077,
+              "Pss_File_kib": 2660,
+              "Shared_Clean_kib": 10988,
+              "Shared_Dirty_kib": 45292,
+              "Private_Clean_kib": 312,
+              "Private_Dirty_kib": 35956,
+              "Anonymous_kib": 81248,
+              "VmSize_kib": 173224,
+              "VmRSS_kib": 92532,
+              "RssAnon_kib": 81232,
+              "RssFile_kib": 11300,
+              "minflt": 23016,
+              "majflt": 2
+            },
+            "worker_1": {
+              "pid": 1237,
+              "Rss_kib": 101140,
+              "Pss_kib": 65322,
+              "Pss_Anon_kib": 64163,
+              "Pss_File_kib": 1158,
+              "Shared_Clean_kib": 6300,
+              "Shared_Dirty_kib": 46304,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 48536,
+              "Anonymous_kib": 94840,
+              "VmSize_kib": 113560,
+              "VmRSS_kib": 100900,
+              "RssAnon_kib": 94600,
+              "RssFile_kib": 6300,
+              "minflt": 12203,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1238,
+              "Rss_kib": 96444,
+              "Pss_kib": 60618,
+              "Pss_Anon_kib": 59469,
+              "Pss_File_kib": 1148,
+              "Shared_Clean_kib": 6224,
+              "Shared_Dirty_kib": 46452,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 43768,
+              "Anonymous_kib": 90220,
+              "VmSize_kib": 108948,
+              "VmRSS_kib": 96384,
+              "RssAnon_kib": 90160,
+              "RssFile_kib": 6224,
+              "minflt": 11036,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 290132,
+            "Pss_kib": 179678
+          }
+        }
+      }
+    },
+    {
+      "preload_app": true,
+      "warm_urlconf_in_master": true,
+      "master_pid": 1244,
+      "worker_pids": [
+        1245,
+        1246
+      ],
+      "hook_events": [
+        {
+          "event": "master_ready",
+          "pid": 1244,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": true,
+            "probe_site.views": true
+          }
+        },
+        {
+          "event": "post_fork",
+          "pid": 1245,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": true,
+            "probe_site.views": true
+          }
+        },
+        {
+          "event": "post_worker_init",
+          "pid": 1245,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": true,
+            "probe_site.views": true
+          }
+        },
+        {
+          "event": "post_fork",
+          "pid": 1246,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": true,
+            "probe_site.views": true
+          }
+        },
+        {
+          "event": "post_worker_init",
+          "pid": 1246,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": true,
+            "probe_site.views": true
+          }
+        }
+      ],
+      "readings": {
+        "boot": {
+          "processes": {
+            "master": {
+              "pid": 1244,
+              "Rss_kib": 99916,
+              "Pss_kib": 35199,
+              "Pss_Anon_kib": 32352,
+              "Pss_File_kib": 2847,
+              "Shared_Clean_kib": 10968,
+              "Shared_Dirty_kib": 84364,
+              "Private_Clean_kib": 380,
+              "Private_Dirty_kib": 4204,
+              "Anonymous_kib": 88568,
+              "VmSize_kib": 180808,
+              "VmRSS_kib": 99908,
+              "RssAnon_kib": 88560,
+              "RssFile_kib": 11348,
+              "minflt": 24687,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1245,
+              "Rss_kib": 94112,
+              "Pss_kib": 32328,
+              "Pss_Anon_kib": 31310,
+              "Pss_File_kib": 1017,
+              "Shared_Clean_kib": 5664,
+              "Shared_Dirty_kib": 86208,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 2240,
+              "Anonymous_kib": 88448,
+              "VmSize_kib": 107060,
+              "VmRSS_kib": 93632,
+              "RssAnon_kib": 88448,
+              "RssFile_kib": 5184,
+              "minflt": 590,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1246,
+              "Rss_kib": 94048,
+              "Pss_kib": 32239,
+              "Pss_Anon_kib": 31228,
+              "Pss_File_kib": 1011,
+              "Shared_Clean_kib": 5600,
+              "Shared_Dirty_kib": 86372,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 2076,
+              "Anonymous_kib": 88448,
+              "VmSize_kib": 107060,
+              "VmRSS_kib": 93696,
+              "RssAnon_kib": 88448,
+              "RssFile_kib": 5248,
+              "minflt": 588,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 288076,
+            "Pss_kib": 99766
+          }
+        },
+        "first_request": {
+          "served": {
+            "1245": 1,
+            "1246": 1
+          },
+          "processes": {
+            "master": {
+              "pid": 1244,
+              "Rss_kib": 99916,
+              "Pss_kib": 36336,
+              "Pss_Anon_kib": 33597,
+              "Pss_File_kib": 2738,
+              "Shared_Clean_kib": 10988,
+              "Shared_Dirty_kib": 82488,
+              "Private_Clean_kib": 360,
+              "Private_Dirty_kib": 6080,
+              "Anonymous_kib": 88568,
+              "VmSize_kib": 180808,
+              "VmRSS_kib": 99908,
+              "RssAnon_kib": 88560,
+              "RssFile_kib": 11348,
+              "minflt": 24687,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1245,
+              "Rss_kib": 94640,
+              "Pss_kib": 33956,
+              "Pss_Anon_kib": 32827,
+              "Pss_File_kib": 1128,
+              "Shared_Clean_kib": 6184,
+              "Shared_Dirty_kib": 83804,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 4652,
+              "Anonymous_kib": 88456,
+              "VmSize_kib": 107060,
+              "VmRSS_kib": 94640,
+              "RssAnon_kib": 88456,
+              "RssFile_kib": 6184,
+              "minflt": 1224,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1246,
+              "Rss_kib": 94576,
+              "Pss_kib": 33883,
+              "Pss_Anon_kib": 32761,
+              "Pss_File_kib": 1121,
+              "Shared_Clean_kib": 6120,
+              "Shared_Dirty_kib": 83936,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 4520,
+              "Anonymous_kib": 88456,
+              "VmSize_kib": 107060,
+              "VmRSS_kib": 94576,
+              "RssAnon_kib": 88456,
+              "RssFile_kib": 6120,
+              "minflt": 1219,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 289132,
+            "Pss_kib": 104175
+          }
+        },
+        "catalog_scan": {
+          "served": {
+            "1245": 1,
+            "1246": 1
+          },
+          "processes": {
+            "master": {
+              "pid": 1244,
+              "Rss_kib": 99916,
+              "Pss_kib": 55195,
+              "Pss_Anon_kib": 52457,
+              "Pss_File_kib": 2738,
+              "Shared_Clean_kib": 10988,
+              "Shared_Dirty_kib": 54200,
+              "Private_Clean_kib": 360,
+              "Private_Dirty_kib": 34368,
+              "Anonymous_kib": 88568,
+              "VmSize_kib": 180808,
+              "VmRSS_kib": 99908,
+              "RssAnon_kib": 88560,
+              "RssFile_kib": 11348,
+              "minflt": 24687,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1245,
+              "Rss_kib": 94640,
+              "Pss_kib": 52827,
+              "Pss_Anon_kib": 51699,
+              "Pss_File_kib": 1128,
+              "Shared_Clean_kib": 6184,
+              "Shared_Dirty_kib": 55492,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 32964,
+              "Anonymous_kib": 88456,
+              "VmSize_kib": 107060,
+              "VmRSS_kib": 94640,
+              "RssAnon_kib": 88456,
+              "RssFile_kib": 6184,
+              "minflt": 8303,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1246,
+              "Rss_kib": 94576,
+              "Pss_kib": 52753,
+              "Pss_Anon_kib": 51631,
+              "Pss_File_kib": 1121,
+              "Shared_Clean_kib": 6120,
+              "Shared_Dirty_kib": 55628,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 32828,
+              "Anonymous_kib": 88456,
+              "VmSize_kib": 107060,
+              "VmRSS_kib": 94576,
+              "RssAnon_kib": 88456,
+              "RssFile_kib": 6120,
+              "minflt": 8297,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 289132,
+            "Pss_kib": 160775
+          }
+        },
+        "retained_256_kib_objects": {
+          "retained": {
+            "1245": 17,
+            "1246": 23
+          },
+          "processes": {
+            "master": {
+              "pid": 1244,
+              "Rss_kib": 99916,
+              "Pss_kib": 55825,
+              "Pss_Anon_kib": 53087,
+              "Pss_File_kib": 2738,
+              "Shared_Clean_kib": 10988,
+              "Shared_Dirty_kib": 53256,
+              "Private_Clean_kib": 360,
+              "Private_Dirty_kib": 35312,
+              "Anonymous_kib": 88568,
+              "VmSize_kib": 180808,
+              "VmRSS_kib": 99908,
+              "RssAnon_kib": 88560,
+              "RssFile_kib": 11348,
+              "minflt": 24687,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1245,
+              "Rss_kib": 98108,
+              "Pss_kib": 56943,
+              "Pss_Anon_kib": 55815,
+              "Pss_File_kib": 1128,
+              "Shared_Clean_kib": 6184,
+              "Shared_Dirty_kib": 54512,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 37412,
+              "Anonymous_kib": 91924,
+              "VmSize_kib": 110644,
+              "VmRSS_kib": 97924,
+              "RssAnon_kib": 91740,
+              "RssFile_kib": 6184,
+              "minflt": 9417,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1246,
+              "Rss_kib": 99580,
+              "Pss_kib": 58403,
+              "Pss_Anon_kib": 57281,
+              "Pss_File_kib": 1121,
+              "Shared_Clean_kib": 6120,
+              "Shared_Dirty_kib": 54652,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 38808,
+              "Anonymous_kib": 93460,
+              "VmSize_kib": 112184,
+              "VmRSS_kib": 99480,
+              "RssAnon_kib": 93360,
+              "RssFile_kib": 6120,
+              "minflt": 9792,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 297604,
+            "Pss_kib": 171171
+          }
+        }
+      }
+    },
+    {
+      "preload_app": false,
+      "warm_urlconf_in_master": false,
+      "master_pid": 1252,
+      "worker_pids": [
+        1253,
+        1254
+      ],
+      "hook_events": [
+        {
+          "event": "master_ready",
+          "pid": 1252,
+          "modules": {
+            "django": false,
+            "probe_site.catalog": false,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_fork",
+          "pid": 1253,
+          "modules": {
+            "django": false,
+            "probe_site.catalog": false,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_fork",
+          "pid": 1254,
+          "modules": {
+            "django": false,
+            "probe_site.catalog": false,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_worker_init",
+          "pid": 1253,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        },
+        {
+          "event": "post_worker_init",
+          "pid": 1254,
+          "modules": {
+            "django": true,
+            "probe_site.catalog": true,
+            "probe_site.urls": false,
+            "probe_site.views": false
+          }
+        }
+      ],
+      "readings": {
+        "boot": {
+          "processes": {
+            "master": {
+              "pid": 1252,
+              "Rss_kib": 29020,
+              "Pss_kib": 17417,
+              "Pss_Anon_kib": 15306,
+              "Pss_File_kib": 2110,
+              "Shared_Clean_kib": 10512,
+              "Shared_Dirty_kib": 4800,
+              "Private_Clean_kib": 8,
+              "Private_Dirty_kib": 13700,
+              "Anonymous_kib": 18500,
+              "VmSize_kib": 110036,
+              "VmRSS_kib": 28988,
+              "RssAnon_kib": 18468,
+              "RssFile_kib": 10520,
+              "minflt": 7158,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1253,
+              "Rss_kib": 91156,
+              "Pss_kib": 80611,
+              "Pss_Anon_kib": 78938,
+              "Pss_File_kib": 1672,
+              "Shared_Clean_kib": 8992,
+              "Shared_Dirty_kib": 4864,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 77300,
+              "Anonymous_kib": 82164,
+              "VmSize_kib": 101648,
+              "VmRSS_kib": 90880,
+              "RssAnon_kib": 82144,
+              "RssFile_kib": 8736,
+              "minflt": 20364,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1254,
+              "Rss_kib": 91156,
+              "Pss_kib": 80591,
+              "Pss_Anon_kib": 78918,
+              "Pss_File_kib": 1672,
+              "Shared_Clean_kib": 8992,
+              "Shared_Dirty_kib": 4904,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 77260,
+              "Anonymous_kib": 82164,
+              "VmSize_kib": 101648,
+              "VmRSS_kib": 90880,
+              "RssAnon_kib": 82144,
+              "RssFile_kib": 8736,
+              "minflt": 20363,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 211332,
+            "Pss_kib": 178619
+          }
+        },
+        "first_request": {
+          "served": {
+            "1253": 1,
+            "1254": 1
+          },
+          "processes": {
+            "master": {
+              "pid": 1252,
+              "Rss_kib": 29020,
+              "Pss_kib": 17621,
+              "Pss_Anon_kib": 15511,
+              "Pss_File_kib": 2109,
+              "Shared_Clean_kib": 10512,
+              "Shared_Dirty_kib": 4492,
+              "Private_Clean_kib": 8,
+              "Private_Dirty_kib": 14008,
+              "Anonymous_kib": 18500,
+              "VmSize_kib": 110036,
+              "VmRSS_kib": 28988,
+              "RssAnon_kib": 18468,
+              "RssFile_kib": 10520,
+              "minflt": 7158,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1253,
+              "Rss_kib": 98128,
+              "Pss_kib": 87742,
+              "Pss_Anon_kib": 86063,
+              "Pss_File_kib": 1678,
+              "Shared_Clean_kib": 9056,
+              "Shared_Dirty_kib": 4532,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 84540,
+              "Anonymous_kib": 89072,
+              "VmSize_kib": 108816,
+              "VmRSS_kib": 97988,
+              "RssAnon_kib": 88932,
+              "RssFile_kib": 9056,
+              "minflt": 22175,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1254,
+              "Rss_kib": 98128,
+              "Pss_kib": 87722,
+              "Pss_Anon_kib": 86043,
+              "Pss_File_kib": 1678,
+              "Shared_Clean_kib": 9056,
+              "Shared_Dirty_kib": 4572,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 84500,
+              "Anonymous_kib": 89072,
+              "VmSize_kib": 108816,
+              "VmRSS_kib": 97988,
+              "RssAnon_kib": 88932,
+              "RssFile_kib": 9056,
+              "minflt": 22174,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 225276,
+            "Pss_kib": 193085
+          }
+        },
+        "catalog_scan": {
+          "served": {
+            "1253": 1,
+            "1254": 1
+          },
+          "processes": {
+            "master": {
+              "pid": 1252,
+              "Rss_kib": 29020,
+              "Pss_kib": 17626,
+              "Pss_Anon_kib": 15517,
+              "Pss_File_kib": 2109,
+              "Shared_Clean_kib": 10512,
+              "Shared_Dirty_kib": 4484,
+              "Private_Clean_kib": 8,
+              "Private_Dirty_kib": 14016,
+              "Anonymous_kib": 18500,
+              "VmSize_kib": 110036,
+              "VmRSS_kib": 28988,
+              "RssAnon_kib": 18468,
+              "RssFile_kib": 10520,
+              "minflt": 7158,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1253,
+              "Rss_kib": 98128,
+              "Pss_kib": 87747,
+              "Pss_Anon_kib": 86069,
+              "Pss_File_kib": 1678,
+              "Shared_Clean_kib": 9056,
+              "Shared_Dirty_kib": 4524,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 84548,
+              "Anonymous_kib": 89072,
+              "VmSize_kib": 108816,
+              "VmRSS_kib": 97988,
+              "RssAnon_kib": 88932,
+              "RssFile_kib": 9056,
+              "minflt": 22177,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1254,
+              "Rss_kib": 98128,
+              "Pss_kib": 87727,
+              "Pss_Anon_kib": 86049,
+              "Pss_File_kib": 1678,
+              "Shared_Clean_kib": 9056,
+              "Shared_Dirty_kib": 4564,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 84508,
+              "Anonymous_kib": 89072,
+              "VmSize_kib": 108816,
+              "VmRSS_kib": 97988,
+              "RssAnon_kib": 88932,
+              "RssFile_kib": 9056,
+              "minflt": 22176,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 225276,
+            "Pss_kib": 193100
+          }
+        },
+        "retained_256_kib_objects": {
+          "retained": {
+            "1253": 31,
+            "1254": 9
+          },
+          "processes": {
+            "master": {
+              "pid": 1252,
+              "Rss_kib": 29020,
+              "Pss_kib": 17626,
+              "Pss_Anon_kib": 15517,
+              "Pss_File_kib": 2109,
+              "Shared_Clean_kib": 10512,
+              "Shared_Dirty_kib": 4484,
+              "Private_Clean_kib": 8,
+              "Private_Dirty_kib": 14016,
+              "Anonymous_kib": 18500,
+              "VmSize_kib": 110036,
+              "VmRSS_kib": 28988,
+              "RssAnon_kib": 18468,
+              "RssFile_kib": 10520,
+              "minflt": 7158,
+              "majflt": 0
+            },
+            "worker_1": {
+              "pid": 1253,
+              "Rss_kib": 104332,
+              "Pss_kib": 93951,
+              "Pss_Anon_kib": 92273,
+              "Pss_File_kib": 1678,
+              "Shared_Clean_kib": 9056,
+              "Shared_Dirty_kib": 4524,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 90752,
+              "Anonymous_kib": 95276,
+              "VmSize_kib": 115020,
+              "VmRSS_kib": 104268,
+              "RssAnon_kib": 95212,
+              "RssFile_kib": 9056,
+              "minflt": 23728,
+              "majflt": 0
+            },
+            "worker_2": {
+              "pid": 1254,
+              "Rss_kib": 98692,
+              "Pss_kib": 88291,
+              "Pss_Anon_kib": 86613,
+              "Pss_File_kib": 1678,
+              "Shared_Clean_kib": 9056,
+              "Shared_Dirty_kib": 4564,
+              "Private_Clean_kib": 0,
+              "Private_Dirty_kib": 85072,
+              "Anonymous_kib": 89636,
+              "VmSize_kib": 109388,
+              "VmRSS_kib": 98460,
+              "RssAnon_kib": 89404,
+              "RssFile_kib": 9056,
+              "minflt": 22317,
+              "majflt": 0
+            }
+          },
+          "totals": {
+            "Rss_kib": 232044,
+            "Pss_kib": 199868
+          }
+        }
+      }
+    }
+  ]
+}

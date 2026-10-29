@@ -1,9 +1,23 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { WorldState } from './model';
-import { sharers } from './model';
+import { memoryRows, sharers } from './model';
 
-const palette = [0x64debc, 0xb193fa, 0xff91a6, 0x93dfff];
+/** Where a deck's nth mapped page tile sits, relative to the deck centre. Up to four rows of six. */
+export function deckTileOffset(visualIndex: number, count: number) {
+  const rows = Math.max(2, Math.ceil(Math.min(count, 24) / 6));
+  const pitch = rows <= 2 ? .9 : Math.min(.6, 1.4 / (rows - 1));
+  return { x: (visualIndex % 6 - 2.5) * .79, z: (Math.floor(visualIndex / 6) - (rows - 1) / 2) * pitch, depth: Math.min(.7, pitch - .15) };
+}
+/** Frames fill the floor in rows of eight, centred, compressing rows as the count grows. */
+export function frameTilePosition(index: number, count: number) {
+  const rows = Math.max(1, Math.ceil(count / 8));
+  const pitch = Math.min(1.28, 6.2 / rows);
+  return { x: (index % 8 - 3.5) * 1.22, z: (Math.floor(index / 8) - (rows - 1) / 2) * pitch, depth: Math.min(1.02, pitch - .2) };
+}
+
+// Purple marks shared frames, so no process colour is purple.
+const palette = [0x64debc, 0x93dfff, 0xff91a6, 0xf7bc79];
 const baseFov = 38;
 const fitAspect = 1.3;
 const kernelY = 1.75;
@@ -32,6 +46,8 @@ export class ForkScene {
   private selectedFrame: number | null = null;
   private selectedObjectId: string | null = null;
   private selectedStructure: { pid: number; part: StructurePart; index: number } | null = null;
+  /** Adds each process's RSS and PSS to its label; read on the next setWorld. */
+  showAccounting = false;
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -173,12 +189,11 @@ export class ForkScene {
 
     const framePositions = new Map<number, THREE.Vector3>();
     world.frames.forEach((frame, index) => {
-      const x = (index % 6 - 2.5) * 1.22;
-      const z = Math.floor(index / 6) * 1.28 - .5;
+      const { x, z, depth } = frameTilePosition(index, world.frames.length);
       const count = sharers(world, frame.id);
       const ownerIndex = world.processes.findIndex(p => p.pid === frame.owner);
       const color = count > 1 ? 0xb39cf3 : frame.owner === null ? 0x74dfad : palette[Math.max(ownerIndex, 0) % palette.length];
-      const tile = this.makeBox(1.06, .2, 1.02, color);
+      const tile = this.makeBox(1.06, .2, depth, color);
       tile.position.set(x, .08, z);
       tile.userData.selection = { kind: 'frame', frameId: frame.id } satisfies SceneSelection;
       this.pickables.push(tile);
@@ -216,7 +231,9 @@ export class ForkScene {
       const border = new THREE.LineSegments(new THREE.EdgesGeometry(deck.geometry), new THREE.LineBasicMaterial({ color: isSelected ? 0xffecad : color, transparent: true, opacity: isSelected ? 1 : .78 }));
       border.position.copy(deck.position);
       this.dynamic.add(border);
-      this.label(`${process.role.toUpperCase()} · PID ${process.pid}${process.status === 'zombie' ? ' · ZOMBIE' : ''}`, new THREE.Vector3(x, y + .3, z), isSelected ? 6 : 5, isSelected ? 'label-selected' : '');
+      const row = this.showAccounting && process.status === 'running' ? memoryRows(world).find(item => item.pid === process.pid) : undefined;
+      this.label(`${process.role.toUpperCase()} · PID ${process.pid}${process.status === 'zombie' ? ' · ZOMBIE' : ''}`, new THREE.Vector3(x, y + .3, z), isSelected ? 6 : 5, isSelected ? 'label-selected' : '',
+        row ? `RSS ${row.rss / 1024} · PSS ${+(row.pss / 1024).toFixed(1)} KiB` : '');
       if (process.status === 'zombie') return;
       const pageTableSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'page_table';
       const pageTable = this.makeBox(5.8, .025, 2.35, pageTableSelected ? 0xffd779 : 0xa686d8, pageTableSelected ? .75 : .3);
@@ -251,14 +268,22 @@ export class ForkScene {
         this.label(process.role === 'master' ? `fork() → ${world.processes.find(p => p.parentPid === process.pid)?.pid ?? 'PID'}` : 'fork() → 0',
           new THREE.Vector3(x + 2.35, y + .78, z - .55), 4, 'scene-label-small');
       }
-      const mappedPages = process.pages.flatMap((frameId, pageIndex) => frameId === null ? [] : [{ frameId, pageIndex }]);
-      if (mappedPages.length > 12) this.label(`+${mappedPages.length - 12} pages · see flat view`, new THREE.Vector3(x, y + .3, z + .9), 0, 'scene-label-small');
-      mappedPages.slice(0, 12).forEach(({ frameId, pageIndex }, visualIndex) => {
-        if (frameId === null) return;
-        const px = x + (visualIndex % 6 - 2.5) * .79;
-        const pz = z + (visualIndex < 6 ? -.45 : .45);
-        const tile = this.makeBox(.62, .1, .7, sharers(world, frameId) > 1 ? 0xbdadef : color);
+      // Every mapped page gets a tile; a page with no frame behind it is a faint tile with no filament.
+      const mappedPages = process.regions.flatMap(region => Array.from({ length: region.pageCount }, (_, offset) => region.startPage + offset))
+        .sort((a, b) => a - b).map(pageIndex => ({ frameId: process.pages[pageIndex] ?? null, pageIndex }));
+      if (mappedPages.length > 24) this.label(`+${mappedPages.length - 24} pages · see flat view`, new THREE.Vector3(x, y + .3, z + .9), 0, 'scene-label-small');
+      mappedPages.slice(0, 24).forEach(({ frameId, pageIndex }, visualIndex) => {
+        const offset = deckTileOffset(visualIndex, mappedPages.length);
+        const px = x + offset.x;
+        const pz = z + offset.z;
+        const tile = frameId === null ? this.makeBox(.62, .06, offset.depth, 0x6c6697, .1) : this.makeBox(.62, .1, offset.depth, sharers(world, frameId) > 1 ? 0xbdadef : color);
         tile.position.set(px, y + .15, pz);
+        if (frameId === null) {
+          const outline = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineDashedMaterial({ color: 0xe2dcff, dashSize: .07, gapSize: .05, transparent: true, opacity: .85 }));
+          outline.computeLineDistances();
+          outline.position.copy(tile.position);
+          this.dynamic.add(outline);
+        }
         tile.userData.selection = { kind: 'page', pid: process.pid, page: pageIndex } satisfies SceneSelection;
         this.pickables.push(tile);
         if (this.selectedPage?.pid === process.pid && this.selectedPage.page === pageIndex) {
@@ -266,7 +291,7 @@ export class ForkScene {
           edge.position.copy(tile.position);
           this.dynamic.add(edge);
         }
-        const floor = framePositions.get(frameId);
+        const floor = frameId === null ? undefined : framePositions.get(frameId);
         if (floor) this.addLine(new THREE.Vector3(px, y, pz), new THREE.Vector3(floor.x, .18, floor.z), color, isSelected ? .6 : .22);
       });
     });

@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyAction, assertInvariants, chargedBytes, guidedHistory, initialWorld, memoryRows, objectRefCount, pageTableBytes, physicalBytes, sharers } from './model.ts';
+import { applyAction, assertInvariants, chargedBytes, initialWorld, memoryRows, objectRefCount, pageTableBytes, physicalBytes, pssBreakdown, sharers, type Action, type WorldState } from './model.ts';
 
-test('fork shares data frames and inherits the listening descriptor', () => {
+const apply = (world: WorldState, ...actions: Action[]) => actions.reduce((state, action) => { const next = applyAction(state, action); assertInvariants(next); return next; }, world);
+const row = (world: WorldState, pid: number) => memoryRows(world).find(item => item.pid === pid)!;
+
+test('fork shares anonymous frames, leaves unwritten file pages out of the child, and inherits the listening descriptor', () => {
   const before = initialWorld(), after = applyAction(before, { type: 'fork', parentPid: 4100 });
   assert.equal(physicalBytes(after), physicalBytes(before));
   assert.equal(sharers(after, 2), 2);
-  assert.deepEqual(after.processes[0].pages, after.processes[1].pages);
+  assert.deepEqual(after.processes[1].pages, [null, null, 2, 3, 4, 5]);
+  assert.equal(row(after, 4101).rss, 4 * 4096);
+  assert.equal(row(after, 4101).mapped, row(after, 4100).mapped);
   assert.deepEqual(after.processes[1].descriptors, before.processes[0].descriptors);
   assert.equal(objectRefCount(after, 'listen:8000'), 2);
   assert.equal(pageTableBytes(after) - pageTableBytes(before), 8192);
@@ -21,19 +26,58 @@ test('first write copies a page; a second write reuses it', () => {
   assert.equal(physicalBytes(reused), physicalBytes(copied));
   assert.equal(reused.events.at(-1)?.kind, 'write');
 });
-test('guided states balance PSS and release exited processes', () => {
-  for (const world of guidedHistory()) {
-    assertInvariants(world);
-    assert.ok(Math.abs(memoryRows(world).reduce((sum, row) => sum + row.pss, 0) - physicalBytes(world)) < 0.001);
-  }
-  assert.equal(guidedHistory()[6].processes.find(p => p.pid === 4101)?.pages.length, 0);
+test('a copy-on-write write leaves the writer’s RSS unchanged and exited processes release their pages', () => {
+  const forked = apply(initialWorld(), { type: 'fork', parentPid: 4100 });
+  const copied = apply(forked, { type: 'write', pid: 4101, page: 3 });
+  assert.equal(copied.events.at(-1)?.kind, 'cow_fault');
+  assert.equal(row(copied, 4101).rss, row(forked, 4101).rss);
+  assert.equal(row(copied, 4101).uss - row(forked, 4101).uss, 4096);
+  const reaped = apply(copied, { type: 'exit', pid: 4101 });
+  assert.equal(reaped.processes[1].pages.length, 0);
+  assert.equal(physicalBytes(reaped), physicalBytes(initialWorld()));
 });
-test('same actions produce identical histories', () => assert.deepEqual(guidedHistory(), guidedHistory()));
+
+test('mapped pages become resident only when touched; reading untouched anonymous memory uses the zero page', () => {
+  const world = apply(initialWorld(), { type: 'mmap', pid: 4100, name: 'scratch', pageCount: 2, kind: 'anonymous', sharing: 'private' });
+  assert.equal(row(world, 4100).mapped - row(initialWorld(), 4100).mapped, 8192);
+  assert.equal(row(world, 4100).rss, row(initialWorld(), 4100).rss);
+  const read = apply(world, { type: 'read', pid: 4100, page: 6 });
+  assert.equal(read.events.at(-1)?.kind, 'zero_page');
+  assert.equal(physicalBytes(read), physicalBytes(world));
+  const written = apply(read, { type: 'write', pid: 4100, page: 6 });
+  assert.equal(written.events.at(-1)?.kind, 'demand_zero');
+  assert.equal(row(written, 4100).rss - row(world, 4100).rss, 4096);
+  assert.throws(() => applyAction(written, { type: 'read', pid: 4100, page: 8 }), /not mapped/);
+});
+
+test('a child faults file pages back in from the page cache; uncached file pages need a major fault', () => {
+  const forked = apply(initialWorld(), { type: 'fork', parentPid: 4100 });
+  const touched = apply(forked, { type: 'read', pid: 4101, page: 0 });
+  assert.equal(touched.events.at(-1)?.kind, 'minor_fault');
+  assert.equal(touched.processes[1].pages[0], touched.processes[0].pages[0]);
+  assert.equal(physicalBytes(touched), physicalBytes(forked));
+  assert.equal(row(touched, 4101).rss - row(forked, 4101).rss, 4096);
+  const mapped = apply(touched, { type: 'mmap', pid: 4101, name: 'report', pageCount: 1, kind: 'file', sharing: 'private', writable: false, fileKey: 'report' });
+  const loaded = apply(mapped, { type: 'read', pid: 4101, page: 6 });
+  assert.equal(loaded.events.at(-1)?.kind, 'major_fault');
+  assert.equal(physicalBytes(loaded) - physicalBytes(mapped), 4096);
+});
+
+test('fork copies entries for a private file region once it holds a copied page, never for shared regions', () => {
+  const world = apply(initialWorld(),
+    { type: 'mmap', pid: 4100, name: 'config', pageCount: 2, kind: 'file', sharing: 'private', fileKey: 'config' },
+    { type: 'read', pid: 4100, page: 6 }, { type: 'write', pid: 4100, page: 7 },
+    { type: 'mmap', pid: 4100, name: 'shared', pageCount: 1, kind: 'file', sharing: 'shared', fileKey: 'shared' },
+    { type: 'read', pid: 4100, page: 8 },
+    { type: 'fork', parentPid: 4100 });
+  assert.deepEqual(world.processes[1].pages.slice(6), [world.processes[0].pages[6], world.processes[0].pages[7], null]);
+});
 
 test('file mappings share cache frames, private file writes copy, and munmap releases only unreferenced frames', () => {
   let world = applyAction(initialWorld(), { type: 'fork', parentPid: 4100 });
   world = applyAction(world, { type: 'mmap', pid: 4100, name: 'data', pageCount: 2, kind: 'file', sharing: 'shared', fileKey: 'dataset' });
   world = applyAction(world, { type: 'mmap', pid: 4101, name: 'data', pageCount: 2, kind: 'file', sharing: 'shared', fileKey: 'dataset' });
+  world = apply(world, ...[6, 7].flatMap(page => [4100, 4101].map(pid => ({ type: 'read' as const, pid, page }))));
   assert.equal(world.processes[0].pages[6], world.processes[1].pages[6]);
   assert.equal(sharers(world, world.processes[0].pages[6]!), 2);
   const beforeWrite = physicalBytes(world);
@@ -79,15 +123,16 @@ test('fork keeps one thread and copies a lock held by a missing thread', () => {
   assertInvariants(world);
 });
 
-test('memory limit counts page tables and OOM releases a victim into zombie state', () => {
+test('memory limit counts page tables and OOM stops the process with the most resident pages', () => {
   let world = initialWorld();
   const limit = chargedBytes(world);
   world = applyAction(world, { type: 'set_limit', bytes: limit });
   world = applyAction(world, { type: 'fork', parentPid: 4100 });
   assert.equal(world.events.at(-1)?.kind, 'oom_kill');
-  assert.equal(world.processes[1].status, 'zombie');
-  assert.equal(world.processes[1].pages.length, 0);
-  assert.equal(chargedBytes(world), limit);
+  assert.equal(world.events.at(-1)?.pid, 4100);
+  assert.equal(world.processes[0].status, 'zombie');
+  assert.equal(world.processes[0].pages.length, 0);
+  assert.ok(chargedBytes(world) <= limit);
   assertInvariants(world);
 });
 
@@ -104,7 +149,9 @@ test('deterministic action walks preserve accounting and prior snapshots', () =>
         ...running.length < 4 ? [{ type: 'fork' as const, parentPid: running[0]?.pid ?? 4100 }] : [],
         ...running.flatMap(p => [
           { type: 'write' as const, pid: p.pid, page: 2 },
+          { type: 'read' as const, pid: p.pid, page: 0 },
           { type: 'mmap' as const, pid: p.pid, name: 'scratch', pageCount: 1, kind: 'anonymous' as const, sharing: 'private' as const },
+          ...p.regions.filter(r => r.id.startsWith('region-')).map(r => ({ type: 'write' as const, pid: p.pid, page: r.startPage })),
           ...p.regions.filter(r => r.id.startsWith('region-')).map(r => ({ type: 'munmap' as const, pid: p.pid, regionId: r.id })),
           ...p.role === 'worker' ? [{ type: 'exit' as const, pid: p.pid }] : [],
         ]),
@@ -151,4 +198,15 @@ test('invariant checks reject duplicate descriptors and threads', () => {
   const duplicateTid = initialWorld();
   duplicateTid.processes[0].threadIds.push(duplicateTid.processes[0].threadIds[0]);
   assert.throws(() => assertInvariants(duplicateTid), /duplicate threads/);
+});
+test('the PSS breakdown groups resident pages by sharer count and matches the ledger', () => {
+  const world = apply(initialWorld(), { type: 'fork', parentPid: 4100 }, { type: 'fork', parentPid: 4100 }, { type: 'read', pid: 4101, page: 0 }, { type: 'write', pid: 4101, page: 2 });
+  const master = pssBreakdown(world, world.processes[0]);
+  // Code page 0 is shared with 4101; heap page 2 still with 4102 after 4101 copied it; pages 3–5 with both workers.
+  assert.deepEqual(master, { exclusive: 4096, shared: [{ sharers: 2, bytes: 2 * 4096 }, { sharers: 3, bytes: 3 * 4096 }] });
+  for (const process of world.processes) {
+    const split = pssBreakdown(world, process), ledger = row(world, process.pid);
+    assert.equal(split.exclusive + split.shared.reduce((sum, item) => sum + item.bytes, 0), ledger.rss);
+    assert.ok(Math.abs(split.exclusive + split.shared.reduce((sum, item) => sum + item.bytes / item.sharers, 0) - ledger.pss) < 1e-9);
+  }
 });

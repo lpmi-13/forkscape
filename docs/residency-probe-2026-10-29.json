@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "source": "reference_linux_vm",
+  "captured_at": "2026-10-29T17:09:32.753879+00:00",
+  "distribution": "Ubuntu 24.04.5 LTS",
+  "kernel": "6.1.167",
+  "page_size_bytes": 4096,
+  "pages_per_mapping": 64,
+  "cases": {
+    "anonymous_private": {
+      "after_mmap": {
+        "Rss_kib": 0,
+        "Pss_kib": 0,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 2479,
+        "majflt": 0
+      },
+      "after_parent_reads_untouched": {
+        "Rss_kib": 0,
+        "Pss_kib": 0,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 2543,
+        "majflt": 0
+      },
+      "after_parent_writes_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 256,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 256,
+        "Anonymous_kib": 256,
+        "minflt": 2607,
+        "majflt": 0
+      },
+      "child_after_sample": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 256,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 256,
+        "minflt": 239,
+        "majflt": 0
+      },
+      "parent_after_child_sample": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 256,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 256,
+        "minflt": 2762,
+        "majflt": 0
+      },
+      "child_after_write_first": {
+        "Rss_kib": 256,
+        "Pss_kib": 130,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 252,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 4,
+        "Anonymous_kib": 256,
+        "minflt": 275,
+        "majflt": 0
+      },
+      "parent_after_child_write_first": {
+        "Rss_kib": 256,
+        "Pss_kib": 130,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 252,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 4,
+        "Anonymous_kib": 256,
+        "minflt": 2783,
+        "majflt": 0
+      }
+    },
+    "file_private_readonly_cold_cache": {
+      "after_mmap": {
+        "Rss_kib": 0,
+        "Pss_kib": 0,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 2883,
+        "majflt": 0
+      },
+      "after_parent_reads_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 256,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 256,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 2889,
+        "majflt": 3
+      },
+      "child_after_sample": {
+        "Rss_kib": 0,
+        "Pss_kib": 0,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 224,
+        "majflt": 0
+      },
+      "parent_after_child_sample": {
+        "Rss_kib": 256,
+        "Pss_kib": 256,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 256,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3025,
+        "majflt": 3
+      },
+      "child_after_read_first": {
+        "Rss_kib": 64,
+        "Pss_kib": 32,
+        "Shared_Clean_kib": 64,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 261,
+        "majflt": 0
+      },
+      "parent_after_child_read_first": {
+        "Rss_kib": 256,
+        "Pss_kib": 224,
+        "Shared_Clean_kib": 64,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 192,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3040,
+        "majflt": 3
+      },
+      "child_after_read_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 256,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 266,
+        "majflt": 0
+      },
+      "parent_after_child_read_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 256,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3040,
+        "majflt": 3
+      }
+    },
+    "file_private_parent_wrote_one_page": {
+      "after_mmap": {
+        "Rss_kib": 0,
+        "Pss_kib": 0,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3130,
+        "majflt": 3
+      },
+      "after_parent_reads_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 256,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 256,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3139,
+        "majflt": 3
+      },
+      "after_parent_writes_first": {
+        "Rss_kib": 256,
+        "Pss_kib": 256,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 252,
+        "Private_Dirty_kib": 4,
+        "Anonymous_kib": 4,
+        "minflt": 3145,
+        "majflt": 3
+      },
+      "child_after_sample": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 252,
+        "Shared_Dirty_kib": 4,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 4,
+        "minflt": 227,
+        "majflt": 0
+      },
+      "parent_after_child_sample": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 252,
+        "Shared_Dirty_kib": 4,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 4,
+        "minflt": 3284,
+        "majflt": 3
+      },
+      "child_after_read_first": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 252,
+        "Shared_Dirty_kib": 4,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 4,
+        "minflt": 261,
+        "majflt": 0
+      },
+      "parent_after_child_read_first": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 252,
+        "Shared_Dirty_kib": 4,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 4,
+        "minflt": 3299,
+        "majflt": 3
+      },
+      "child_after_read_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 252,
+        "Shared_Dirty_kib": 4,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 4,
+        "minflt": 262,
+        "majflt": 0
+      },
+      "parent_after_child_read_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 252,
+        "Shared_Dirty_kib": 4,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 4,
+        "minflt": 3301,
+        "majflt": 3
+      }
+    },
+    "file_shared": {
+      "after_mmap": {
+        "Rss_kib": 0,
+        "Pss_kib": 0,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3390,
+        "majflt": 3
+      },
+      "after_parent_reads_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 256,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 256,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3397,
+        "majflt": 3
+      },
+      "child_after_sample": {
+        "Rss_kib": 0,
+        "Pss_kib": 0,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 229,
+        "majflt": 0
+      },
+      "parent_after_child_sample": {
+        "Rss_kib": 256,
+        "Pss_kib": 256,
+        "Shared_Clean_kib": 0,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 256,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3538,
+        "majflt": 3
+      },
+      "child_after_read_first": {
+        "Rss_kib": 64,
+        "Pss_kib": 32,
+        "Shared_Clean_kib": 64,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 267,
+        "majflt": 0
+      },
+      "parent_after_child_read_first": {
+        "Rss_kib": 256,
+        "Pss_kib": 224,
+        "Shared_Clean_kib": 64,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 192,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3553,
+        "majflt": 3
+      },
+      "child_after_read_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 256,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 271,
+        "majflt": 0
+      },
+      "parent_after_child_read_all": {
+        "Rss_kib": 256,
+        "Pss_kib": 128,
+        "Shared_Clean_kib": 256,
+        "Shared_Dirty_kib": 0,
+        "Private_Clean_kib": 0,
+        "Private_Dirty_kib": 0,
+        "Anonymous_kib": 0,
+        "minflt": 3554,
+        "majflt": 3
+      }
+    }
+  }
+}

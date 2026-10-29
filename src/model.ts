@@ -1,10 +1,11 @@
 export type Source = 'model' | 'recorded' | 'inferred';
-export type EventKind = 'start' | 'fork' | 'read' | 'cow_fault' | 'write' | 'mmap' | 'munmap' | 'open' | 'file_read' | 'close' | 'thread' | 'lock' | 'unlock' | 'limit' | 'oom_kill' | 'exit' | 'reap';
+export type EventKind = 'start' | 'fork' | 'read' | 'zero_page' | 'demand_zero' | 'minor_fault' | 'major_fault' | 'cow_fault' | 'write' | 'mmap' | 'munmap' | 'open' | 'file_read' | 'close' | 'thread' | 'lock' | 'unlock' | 'limit' | 'oom_kill' | 'exit' | 'reap';
 export type RegionKind = 'anonymous' | 'file';
 export interface RegionState { id: string; name: string; startPage: number; pageCount: number; kind: RegionKind; sharing: 'private' | 'shared'; writable: boolean; fileKey?: string }
 export interface DescriptorState { fd: number; objectId: string }
 export interface KernelObjectState { id: string; kind: 'socket' | 'file'; offset: number }
 export interface LockState { id: string; ownerTid: number | null }
+/** pages[i] is the frame behind virtual page i. A page inside a region with no frame is mapped but not resident. */
 export interface ProcessState {
   pid: number; parentPid: number | null; role: 'master' | 'worker'; status: 'running' | 'zombie';
   pages: (number | null)[]; regions: RegionState[]; descriptors: DescriptorState[];
@@ -48,7 +49,7 @@ export function initialWorld(): WorldState {
     }))),
     kernelObjects: [{ id: 'listen:8000', kind: 'socket', offset: 0 }],
     events: [{ kind: 'start', source: 'model', step: 0, pid: 4100,
-      description: 'The master has six mapped pages, a listening socket descriptor, and one thread.' }],
+      description: 'The master has six resident pages, a listening socket descriptor, and one thread.' }],
   };
 }
 
@@ -57,6 +58,18 @@ export function sharers(world: WorldState, frameId: number): number {
 }
 export function regionForPage(process: ProcessState, page: number): RegionState | undefined {
   return process.regions.find(region => page >= region.startPage && page < region.startPage + region.pageCount);
+}
+export function mappedPages(process: ProcessState): number {
+  return process.regions.reduce((total, region) => total + region.pageCount, 0);
+}
+export function residentPages(process: ProcessState): number {
+  return process.pages.filter(id => id !== null).length;
+}
+/** Fork copies page-table entries only for private regions holding anonymous pages; other pages fault in later. */
+export function forkCopiesEntries(world: WorldState, process: ProcessState, region: RegionState): boolean {
+  if (region.sharing !== 'private') return false;
+  return process.pages.slice(region.startPage, region.startPage + region.pageCount)
+    .some(id => id !== null && world.frames.find(frame => frame.id === id)?.kind === 'anonymous');
 }
 export function objectRefCount(world: WorldState, objectId: string): number {
   return world.processes.reduce((count, process) => count + process.descriptors.filter(fd => fd.objectId === objectId).length, 0);
@@ -98,20 +111,54 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     const parent = running(action.parentPid);
     if (action.callerTid !== undefined && !parent.threadIds.includes(action.callerTid)) throw Error(`Thread ${action.callerTid} is not in PID ${parent.pid}`);
     const pid = world.nextPid++;
-    world.processes.push({ ...parent, pid, parentPid: parent.pid, role: 'worker', pages: [...parent.pages],
+    const pages = parent.pages.map((id, page) => {
+      const region = regionForPage(parent, page);
+      return id !== null && region && forkCopiesEntries(world, parent, region) ? id : null;
+    });
+    const skipped = residentPages(parent) - pages.filter(id => id !== null).length;
+    world.processes.push({ ...parent, pid, parentPid: parent.pid, role: 'worker', pages,
       regions: parent.regions.map(r => ({ ...r })), descriptors: parent.descriptors.map(fd => ({ ...fd })),
       threadIds: [pid], locks: parent.locks.map(lock => ({ ...lock })) });
-    add({ kind: 'fork', pid, description: `PID ${pid} forks from ${parent.pid}. Data frames and kernel objects remain shared; only the calling thread survives.` });
+    add({ kind: 'fork', pid, description: `PID ${pid} forks from ${parent.pid}. Anonymous frames and kernel objects remain shared; only the calling thread survives.${skipped ? ` ${skipped} file-backed page${skipped === 1 ? ' is' : 's are'} not resident in the child until it touches ${skipped === 1 ? 'it' : 'them'}.` : ''}` });
   } else if (action.type === 'read' || action.type === 'write') {
-    const process = running(action.pid), page = action.page ?? 2, oldId = process.pages[page];
-    if (oldId === null || oldId === undefined) throw Error(`Page ${page} is not mapped by PID ${action.pid}`);
+    const process = running(action.pid), page = action.page ?? 2, write = action.type === 'write';
     const region = regionForPage(process, page);
-    if (!region) throw Error(`Page ${page} has no region`);
-    if (action.type === 'write' && !region.writable) throw Error(`Region ${region.name} is read-only`);
+    if (!region) throw Error(`Page ${page} is not mapped by PID ${action.pid}`);
+    if (write && !region.writable) throw Error(`Region ${region.name} is read-only`);
+    const kib = world.pageSize / 1024;
+    let oldId = process.pages[page] ?? null;
+    if (oldId === null && region.kind === 'anonymous') {
+      if (!write) {
+        add({ kind: 'zero_page', pid: process.pid, description: `PID ${process.pid} reads untouched page ${page}. The kernel maps its shared zero page, which RSS does not count.` });
+      } else {
+        const newId = world.nextFrameId++;
+        world.frames.push({ id: newId, region: region.name, kind: 'anonymous', owner: process.pid, revision: 1 });
+        process.pages[page] = newId;
+        if (page === 2) process.counter++;
+        add({ kind: 'demand_zero', pid: process.pid, newFrameId: newId, description: `PID ${process.pid} writes untouched page ${page}. The kernel allocates a zeroed ${kib} KiB frame, so RSS grows.` });
+      }
+      return finish(world, add);
+    }
+    let fault: 'minor_fault' | 'major_fault' | null = null;
+    if (oldId === null) {
+      // A file page outside this process's page table: map the page-cache frame, reading it from disk if absent.
+      const fileKey = `${region.fileKey}:${page - region.startPage}`;
+      let cached = world.frames.find(item => item.fileKey === fileKey);
+      fault = cached ? 'minor_fault' : 'major_fault';
+      if (!cached) {
+        cached = { id: world.nextFrameId++, region: region.name, kind: 'file', owner: null, revision: 0, fileKey };
+        world.frames.push(cached);
+      }
+      oldId = cached.id;
+      process.pages[page] = oldId;
+    }
     const frame = world.frames.find(item => item.id === oldId);
     if (!frame) throw Error(`Missing frame ${oldId}`);
-    if (action.type === 'read') {
-      add({ kind: 'read', pid: process.pid, frameId: oldId, description: `PID ${process.pid} reads virtual page ${page}; its mapping and frame are unchanged.` });
+    const faultNote = fault === 'minor_fault' ? ' It was already in the page cache, so a minor fault maps it.' : fault === 'major_fault' ? ' A major fault reads it from disk into the page cache.' : '';
+    if (!write) {
+      add({ kind: fault ?? 'read', pid: process.pid, frameId: oldId, description: fault
+        ? `PID ${process.pid} touches file page ${page}.${faultNote} RSS grows${fault === 'minor_fault' ? '; physical memory does not' : ''}.`
+        : `PID ${process.pid} reads virtual page ${page}; its mapping and frame are unchanged.` });
     } else if (region.sharing === 'private' && (frame.kind === 'file' || sharers(world, oldId) > 1)) {
       const newId = world.nextFrameId++;
       world.frames.push({ id: newId, region: region.name, kind: 'anonymous', owner: process.pid, revision: frame.revision + 1 });
@@ -119,12 +166,12 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
       if (page === 2) process.counter++;
       releaseUnused(world);
       add({ kind: 'cow_fault', pid: process.pid, frameId: oldId, newFrameId: newId,
-        description: `PID ${process.pid} writes 8 bytes to private page ${page}. One ${world.pageSize / 1024} KiB page is copied.` });
+        description: `PID ${process.pid} writes 8 bytes to private page ${page}.${faultNote} One ${kib} KiB page is copied${fault ? '' : '; RSS is unchanged'}.` });
     } else {
       if (page === 2) process.counter++;
       frame.revision++;
       add({ kind: 'write', pid: process.pid, frameId: oldId,
-        description: region.sharing === 'shared' ? `PID ${process.pid} writes shared page ${page}; other mappers see the change.` : `PID ${process.pid} writes exclusive page ${page}; its frame is reused.` });
+        description: region.sharing === 'shared' ? `PID ${process.pid} writes shared page ${page}.${faultNote} Other mappers see the change.` : `PID ${process.pid} writes exclusive page ${page}; its frame is reused.` });
     }
   } else if (action.type === 'mmap') {
     const process = running(action.pid);
@@ -136,16 +183,8 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
       kind: action.kind, sharing: action.sharing, writable: action.writable ?? true,
       ...(action.kind === 'file' ? { fileKey: action.fileKey } : {}) };
     process.regions.push(region);
-    for (let offset = 0; offset < action.pageCount; offset++) {
-      const fileKey = action.kind === 'file' ? `${action.fileKey}:${offset}` : undefined;
-      let frame = fileKey ? world.frames.find(item => item.fileKey === fileKey) : undefined;
-      if (!frame) {
-        frame = { id: world.nextFrameId++, region: action.name, kind: action.kind, owner: action.kind === 'file' ? null : process.pid, revision: 0, ...(fileKey ? { fileKey } : {}) };
-        world.frames.push(frame);
-      }
-      process.pages[startPage + offset] = frame.id;
-    }
-    add({ kind: 'mmap', pid: process.pid, description: `PID ${process.pid} maps ${action.pageCount} ${action.kind} page${action.pageCount === 1 ? '' : 's'} as ${action.name}.` });
+    for (let offset = 0; offset < action.pageCount; offset++) process.pages[startPage + offset] = null;
+    add({ kind: 'mmap', pid: process.pid, description: `PID ${process.pid} maps ${action.pageCount} ${action.kind} page${action.pageCount === 1 ? '' : 's'} as ${action.name}. Nothing is resident until a page is touched.` });
   } else if (action.type === 'munmap') {
     const process = running(action.pid), region = process.regions.find(r => r.id === action.regionId);
     if (!region) throw Error(`Region ${action.regionId} is not mapped by PID ${process.pid}`);
@@ -204,22 +243,39 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     world.processes = world.processes.filter(p => p.pid !== action.pid);
     add({ kind: 'reap', pid: action.pid, description: `The parent calls waitpid() and reaps PID ${action.pid}.` });
   }
+  return finish(world, add);
+}
+
+function finish(world: WorldState, add: (event: Omit<WorldEvent, 'source' | 'step'>) => void): WorldState {
   while (world.limitBytes !== null && chargedBytes(world) > world.limitBytes) {
-    const victim = world.processes.filter(p => p.status === 'running').sort((a, b) =>
-      b.pages.filter(id => id !== null).length - a.pages.filter(id => id !== null).length || b.pid - a.pid)[0];
+    const victim = world.processes.filter(p => p.status === 'running').sort((a, b) => residentPages(b) - residentPages(a) || b.pid - a.pid)[0];
     if (!victim) throw Error('Memory limit cannot be satisfied');
     stopProcess(world, victim);
-    add({ kind: 'oom_kill', pid: victim.pid, description: `Model memory limit exceeded. PID ${victim.pid} is selected as the OOM victim.` });
+    add({ kind: 'oom_kill', pid: victim.pid, description: `Model memory limit exceeded. PID ${victim.pid}, with the most resident pages, is selected as the OOM victim.` });
   }
   return world;
 }
 
+/** Per-process accounting over resident pages. Mapped counts every page in the process's regions, resident or not. */
 export function memoryRows(world: WorldState) {
+  const fileFrames = new Set(world.frames.filter(frame => frame.kind === 'file').map(frame => frame.id));
   return world.processes.map(p => ({ pid: p.pid, role: p.role, status: p.status,
-    rss: p.pages.filter(id => id !== null).length * world.pageSize,
+    mapped: mappedPages(p) * world.pageSize,
+    rss: residentPages(p) * world.pageSize,
+    rssFile: p.pages.filter(id => id !== null && fileFrames.has(id)).length * world.pageSize,
     pss: p.pages.reduce<number>((sum, id) => sum + (id === null ? 0 : world.pageSize / sharers(world, id)), 0),
     uss: p.pages.filter(id => id !== null && sharers(world, id) === 1).length * world.pageSize,
   }));
+}
+/** A process's resident bytes split by how many processes map each frame. RSS counts every group in full; PSS divides each by its sharers. */
+export function pssBreakdown(world: WorldState, process: ProcessState) {
+  const bySharers = new Map<number, number>();
+  for (const id of process.pages) if (id !== null) {
+    const count = sharers(world, id);
+    bySharers.set(count, (bySharers.get(count) ?? 0) + world.pageSize);
+  }
+  return { exclusive: bySharers.get(1) ?? 0,
+    shared: [...bySharers].filter(([count]) => count > 1).sort(([a], [b]) => a - b).map(([count, bytes]) => ({ sharers: count, bytes })) };
 }
 export function assertInvariants(world: WorldState) {
   const ids = new Set<number>();
@@ -253,14 +309,4 @@ export function assertInvariants(world: WorldState) {
   const pss = memoryRows(world).reduce((sum, row) => sum + row.pss, 0);
   if (Math.abs(pss - physicalBytes(world)) > 0.001) throw Error('PSS mismatch');
   if (world.limitBytes !== null && chargedBytes(world) > world.limitBytes) throw Error('Memory limit exceeded');
-}
-export const guidedActions: Action[] = [
-  { type: 'fork', parentPid: 4100 }, { type: 'write', pid: 4101, page: 2 },
-  { type: 'write', pid: 4100, page: 3 }, { type: 'fork', parentPid: 4100 },
-  { type: 'write', pid: 4102, page: 2 }, { type: 'exit', pid: 4101 }, { type: 'reap', pid: 4101 },
-];
-export function guidedHistory(): WorldState[] {
-  const states = [initialWorld()];
-  for (const action of guidedActions) { const next = applyAction(states.at(-1)!, action); assertInvariants(next); states.push(next); }
-  return states;
 }

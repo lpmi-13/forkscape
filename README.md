@@ -1,6 +1,6 @@
 # Forkscape
 
-Forkscape is a browser lab for learning what Linux `fork()` shares, what a write copies, and why process memory numbers can mislead. It follows the [process fork visualization plan](/home/adam/projects/plan-docs/PROCESS_FORK_VISUALIZATION_PLAN.md).
+Forkscape is an explorable explanation of what Linux `fork()` shares, what a write copies, and why process memory numbers can mislead. Its scenario library replays production problems with pre-fork servers such as Gunicorn; free exploration of the same model is secondary. It follows the [process fork visualization plan](/home/adam/projects/plan-docs/PROCESS_FORK_VISUALIZATION_PLAN.md).
 
 ## Run locally
 
@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no backend or container is needed for this first slice. Run `npm test` for model checks and `npm run build` for type checking and a production bundle. `npm run test:ui` uses system Google Chrome (or `CHROME_BIN`) to complete Modules 1–4 and the case in flat and 3D modes, exercises 3D canvas picking, checks that switching views preserves the ledger and timeline, and restores exported progress.
+Open **http://127.0.0.1:5173/**. The app is a static TypeScript/Vite site; no backend or container is needed for this first slice. Run `npm test` for model checks and `npm run build` for type checking and a production bundle. `npm run test:ui` uses system Google Chrome (or `CHROME_BIN`) to step through every scenario in flat and 3D modes. It also checks the chart, the RSS/PSS comparison, inspector, ledger, and timeline, 3D canvas picking, view switching, free exploration, browser back navigation, and the phone layout.
 
 ## Preferred Linux experiment runtime
 
@@ -41,9 +41,21 @@ labctl ssh <playground-id> -- sudo -n python3 /tmp/forkscape-cgroup-oom-probe.py
 
 In [all three checked-in OOM runs](docs/probe-variance-2026-10-28.md), the first child had `oom_score_adj=500` and was killed when a second child allocated memory; the cgroup's `oom_kill` counter increased by one. The other event counts varied. These samples are observations from one kernel and workload, not a general accounting or OOM victim-selection rule. They validate teaching claims; they are not replay bundles.
 
+Two probes check the residency model and the scenarios' Django claims. The Django probe needs an interpreter with Django and Gunicorn, for example a venv created in the VM:
+
+```bash
+labctl cp scripts/residency_probe.py <playground-id>:/tmp/forkscape-residency-probe.py
+labctl ssh <playground-id> -- python3 /tmp/forkscape-residency-probe.py
+labctl ssh <playground-id> -- 'sudo -n apt-get install -y -qq python3-venv && python3 -m venv /tmp/fsenv && /tmp/fsenv/bin/pip install -q "django==6.1.*" "gunicorn==26.*"'
+labctl cp scripts/django_residency_probe.py <playground-id>:/tmp/forkscape-django-probe.py
+labctl ssh <playground-id> -- /tmp/fsenv/bin/python /tmp/forkscape-django-probe.py
+```
+
+The [residency findings](docs/residency-findings-2026-10-29.md) summarize the results; the Django runs used Django 6.1.2 and Gunicorn 26.2.0. A mapping is not resident until touched, fork leaves never-written file pages out of the child's RSS, and a copy-on-write fault leaves the writer's RSS unchanged. Under Gunicorn, Django imports the URLconf on each worker's first request. One read-only scan of a preloaded catalog per worker added 55.2 MiB to Σ PSS and nothing to Σ RSS; the master's PSS rose 18.4 MiB though it served no requests.
+
 ## Status
 
-This repository contains a **runnable model-mode vertical slice**, centered on Modules 1–4 plus a creeping-memory case study. The current MVP is model-only, narrower than the original plan. All displayed memory values are explicitly illustrative model data, not Linux measurements.
+This repository contains a **runnable model-mode vertical slice**, centered on a library of eight scenarios. The current MVP is model-only, narrower than the original plan. All displayed memory values are explicitly illustrative model data, not Linux measurements.
 
 ### MVP boundary
 
@@ -56,42 +68,46 @@ After the MVP, this repository should define a versioned contract for recordings
 - TypeScript/Vite app with pinned three.js, responsive layout, lazy-loaded 3D scene, orbit control, glass process decks, page tiles, filaments, kernel membrane, and physical frame floor.
 - Flat, keyboard-accessible process/page/frame view using the same state as 3D. The app falls back to flat mode if WebGL initialization fails.
 - Pure deterministic model with `fork`, copy-on-write fault, exclusive-frame reuse, `mmap`/`munmap`, file-backed shared mappings, simplified page-table charges, memory limits and OOM selection, process exit, and zombie/reap.
+- Residency: pages are mapped before they are resident. Writing an untouched anonymous page allocates a zeroed frame; reading it maps the zero page, which RSS does not count. File pages fault in from the page cache (minor) or from disk (major). Fork copies page-table entries only for private regions that hold anonymous pages.
 - Descriptor objects with inherited references and shared file offsets; threads and locks with only one thread surviving `fork` and held locks remaining held in the child.
-- Guided content for Modules 1–4 with predict → act → observe → explain → connect stages. Learners can fork, write, compare counters, exit, reap, inspect mappings and descriptors, and branch the timeline from an earlier state. Answers persist in local storage.
-- Linked event timeline, RSS/PSS/USS ledger, and inspector. Scrubbing selects one world-state snapshot for every view.
-- Model tests for shared frames at fork, page-sized copy, exclusive reuse, PSS accounting, region mapping and release, descriptor offsets, thread/lock inheritance, OOM behavior, and deterministic action walks.
+- A scenario library opens on arrival. Six memory scenarios cover copy-on-write decay, a leak, decay reaching a memory limit, summed RSS overcounting, new-worker warm-up, and running without preload. Two more cover an inherited file offset and a lock held by a thread that does not survive fork. Each scenario names its production symptom and steps through modeled states with captions. A chart compares RSS with PSS or with memory in use (Σ PSS), and the scene points at the page each step touched. Notes explain what to watch, the mechanism, the production consequences and levers, and the `/proc` evidence, with the Linux reference observation where a probe covers it. Each scenario has its own URL hash, so it can be linked directly.
+- RSS versus PSS: five memory scenarios depend on the difference, are tagged in the library, and open with a callout that explains it at each step. The callout draws every process's RSS and PSS as bars of pages, in which shared pages shrink to their share in PSS, with Σ RSS, Σ PSS, and the overcount. The no-preload scenario adds a table showing that Σ RSS and Σ PSS rank preload and no preload in opposite order. Elsewhere in the memory scenarios and in free exploration, the same comparison opens on request. While it is shown, 3D decks and flat process cards carry each process's RSS and PSS. The inspector explains how RSS and PSS count a selected process or page.
+- Free exploration starts from the initial master or from any scenario step and keeps its own timeline. Nothing is graded or saved; only the 3D/flat choice persists.
+- Linked event timeline, mapped/RSS/PSS/USS ledger, and inspector. Scrubbing selects one world-state snapshot for every view.
+- Model tests for shared frames at fork, page-sized copy, exclusive reuse, residency and faults, PSS accounting, region mapping and release, descriptor offsets, thread/lock inheritance, OOM behavior, and deterministic action walks. Scenario tests check each scenario's claim, such as flat RSS during decay.
 - Selectable processes, pages, frames, and kernel objects in both 3D and flat views. The 3D view has camera presets, zoom controls, descriptor cables, thread spindles, a page-table sheet, and a model-mode fork stack. The inspector shows the modeled mechanism and related `/proc` evidence.
 - An original visual theme combining a neon dusk palette with warm, chunky, garden-game shapes. The 3D scene uses brighter page tiles and stacked rings to mark shared frames on a plain backdrop; the flat view uses the same shared/exclusive colors.
-- The 3D or flat scene fills the window, with the 3D/flat toggle in the top-right corner. Everything else — guided lab, inspector, event timeline, memory ledger, and camera controls and legend — sits behind a menu that starts collapsed and opens one panel at a time: beside the scene on wide screens, above it on narrow ones. Escape closes the menu or the open panel. On tall, narrow screens the 3D camera widens its field of view so the whole frame floor stays in view. Scene labels stay inside the scene and never overlap: a label moves below its object when the space above is taken, and otherwise the less important label is hidden (processes, then fork returns, kernel objects, frames, and layer names). On phones, frame labels drop the sharer count.
-- Module 1–4 exercises now include process/kernel classification, a fork walkthrough through zombie/reap, a before/after virtual-address trace, and logarithmic fork/write size predictions. Each has an explicit completion check, and results persist.
+- The 3D or flat scene fills the window, with the 3D/flat toggle in the top-right corner. The scenario panel starts open. The other panels — inspector, event timeline, memory ledger, and camera controls and legend — are in the menu, and one panel is open at a time: beside the scene on wide screens, above it on narrow ones. Escape closes the menu or the open panel. On tall, narrow screens the 3D camera widens its field of view so the whole frame floor stays in view. Scene labels stay inside the scene and never overlap: a label moves below its object when the space above is taken, and otherwise the less important label is hidden (processes, then fork returns, kernel objects, frames, and layer names). On phones, frame labels drop the sharer count.
 - Cables, page-table sheets, thread spindles, and fork stack blocks have inspector explanations and keyboard-accessible flat/inspector controls. Reduced-motion mode removes hover movement and orbit damping; the scene renders on demand when idle.
 - Stronger descriptor/thread invariants and action-shape checks. A reproducible Linux reference probe runs in the preferred `labctl` VM and records one fork/COW/file-cache comparison.
-- A creeping-memory case study contrasts finite copy-on-write decay with a retained-page leak across 24 modeled requests. Learners predict, inspect both histories in the same timeline/scene/ledger, and connect each curve to a mechanism and evidence. Completion persists. It is a teaching comparison, not a calibrated CPython or Linux recording.
 - Reference VM probes now cover varied anonymous mapping sizes, process-wide page-table readings, and an isolated cgroup-v2 OOM observation.
-- An automated browser check completes the four guided exercises and case study in flat and 3D modes, exercises canvas picking, and verifies that switching views preserves the selected state.
+- An automated browser check steps through every scenario in flat and 3D modes, exercises canvas picking, and verifies that switching views preserves the selected state.
 - Reference probes repeated on three disposable VMs show a 76–80 KiB process-wide `VmPTE` baseline and variable cgroup event counts. The app presents these as labeled Linux reference observations, separate from the model charge and victim choice.
-- Progress import/export (version 3 JSON, validated in `src/progress.ts`) is hidden from the UI for the MVP.
+- Residency and Django 6.1/Gunicorn 26 reference probes (29 October 2026) confirm the residency rules and each Django claim the scenarios make, including the URLconf lazy import, flat RSS during a catalog scan, and Σ RSS ranking preload above no preload while Σ PSS ranks it below.
 
 ### Next: finish the model MVP
 
 - Probe additional kernels, allocation patterns, and memory limits to check the model's teaching claims. The three current VMs share one image and kernel.
 - Validate scene readability with learners and conduct a manual screen-reader review. Check the 3D frame budget when an integrated GPU is available.
 
-### Original plan backlog, subject to rescoping
+### Backlog
 
-| Phase | Remaining work |
+| Area | Remaining work |
 | --- | --- |
-| 0 — discovery | Further kernel reference checks, renderer and metaphor tests. |
-| 2 — telemetry, deferred beyond MVP | Decide a recording contract and frontend validation for externally produced files, then consider upload and visualization. The repository will not contain a general recording pipeline. |
-| 3 — runtime and measurement | CPython heap/GC model, modeled request scenarios, copy-on-write decay, Module 8, Module 9, sizing calculator, and sandbox controls. Calibration from recordings is deferred. |
-| 4 — drills and pilot | Modules 0 and 10, incident drills D1–D3, concept inventory/map, expert fact review, accessibility and performance gates, pilot study. |
+| Concept inventory | Build a concept inventory from the plan's threshold concepts (§5.3) and misconception inventory (§5.5). Map each concept and misconception to the scenarios that address it, so gaps in the library are visible. How the inventory is used beyond that is still open. |
+| Scenario library | Add scenarios for production symptoms the library does not cover yet: per-worker state such as in-memory caches and metrics counters that differ by worker, `HUP` reload with preload, worker timeouts and respawn cost, and random-number state copied by fork. A sizing walkthrough driven by Σ PSS after decay replaces the plan's sizing calculator. |
+| Model | CPython heap and GC detail beyond "a read is a page write", fault-around, and page cache that outlives its last mapping, each only where a scenario needs it. |
+| Quality gates | Expert fact review of every scenario claim; accessibility and performance gates. |
+| Telemetry, deferred beyond MVP | Decide a recording contract and frontend validation for externally produced files, then consider upload and visualization. The repository will not contain a general recording pipeline. |
 | Conditional | GPU-heavy views only where supported and justified by usability and performance checks. |
-| 5 — extensions | Celery and other prefork systems; live lab and learner recording remain outside the current scope. |
+| Extensions | Celery and other prefork systems; live lab and learner recording remain outside the current scope. |
+
+The scenario library replaces the original plan's module sequence (Modules 0–10) and incident drills D1–D3. In-app predictions and graded assessment are out of scope.
 
 ## Model boundaries
 
-The starting example has six 4 KiB mapped data pages in one master. A fork adds another address space pointing to the same data frames; the first write to a shared private page creates one new 4 KiB frame. The case study adds a 12-page catalog before fork: one branch writes a new catalog page per request until every page has been copied, while the other retains one new private page per request. RSS, PSS, and USS count **mapped data pages only**. The model charge adds one root page-table page per running process and one leaf page per occupied group of 512 virtual pages. File-backed frames are released when their last model mapping disappears, and OOM chooses a process by mapped-page count. These are teaching simplifications, not Linux or cgroup accounting. The model omits other kernel structures and actual socket I/O, so it must not be used to size a real deployment. The 3D floor layout is schematic and does not represent physical frame addresses.
+The starting example has six resident 4 KiB pages in one master: code and libraries backed by files, then heap and stack. Scenarios add a few more pages, such as a 3-page imported app or a 6-page catalog, at teaching scale rather than measured size. A fork adds another address space that points to the same anonymous frames; file pages that were never written stay out of the child until it touches them. The first write to a shared private page creates one new 4 KiB frame. Mapped size counts every page in a process's regions. RSS, PSS, and USS count **resident pages only**, so a copy-on-write copy leaves the writer's RSS unchanged. The model charge adds one root page-table page per running process and one leaf page per occupied group of 512 resident pages. A file frame stays in the model's page cache only while some process maps it, so a later touch is a major fault. The model also omits fault-around and readahead. OOM chooses the process with the most resident pages, breaking ties by the highest PID. A CPython read that updates reference counts is modeled as a page write. These are teaching simplifications, not Linux or cgroup accounting. The model omits other kernel structures and actual socket I/O, so it must not be used to size a real deployment. The 3D floor layout is schematic and does not represent physical frame addresses.
 
-The model source is [src/model.ts](src/model.ts), the interface is [src/main.ts](src/main.ts), and the three.js renderer is [src/scene.ts](src/scene.ts). Both model renderers consume the same `WorldState`. A future recording format and its relation to `WorldState` remain design decisions; aggregate `/proc` figures alone cannot establish exact frame mappings.
+The model source is [src/model.ts](src/model.ts), the scenario library is [src/scenarios.ts](src/scenarios.ts), the interface is [src/main.ts](src/main.ts), and the three.js renderer is [src/scene.ts](src/scene.ts). A scenario is a sequence of model states with captions, so a sequence loaded from telemetry after the MVP could use the same viewer. Both model renderers consume the same `WorldState`. A future recording format and its relation to `WorldState` remain design decisions; aggregate `/proc` figures alone cannot establish exact frame mappings.
 
-The visual styling is in [src/theme.css](src/theme.css). Purple tiles and stacked rings indicate shared frames; green tiles indicate an exclusive frame without a worker owner. Warm amber identifies the master, while worker colors remain distinct. Decorative dusk colors and the pixel-styled interface do not change model values or data-source labels.
+The visual styling is in [src/theme.css](src/theme.css). Purple tiles and stacked rings indicate shared frames; green tiles indicate an exclusive frame without a worker owner. Warm amber identifies the master, and worker colors are never purple. A dashed outline marks a page that is mapped but not resident. Chart color follows the metric: RSS is amber, per-process PSS magenta, and memory in use (Σ PSS) or the cgroup charge blue, a set validated for color-vision deficiency against the panel surface. In the RSS/PSS comparison, page segments reuse the scene's shared purple and exclusive green. Decorative dusk colors and the pixel-styled interface do not change model values or data-source labels.
