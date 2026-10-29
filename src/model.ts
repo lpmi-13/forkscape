@@ -45,7 +45,7 @@ export function initialWorld(): WorldState {
       regions, descriptors: [{ fd: 3, objectId: 'listen:8000' }], threadIds: [4100], locks: [], counter: 0, nextPage: 6 }],
     frames: regions.flatMap(region => Array.from({ length: region.pageCount }, (_, offset) => ({
       id: region.startPage + offset, region: region.name, kind: region.kind, owner: null, revision: 0,
-      ...(region.kind === 'file' ? { fileKey: `${region.fileKey}:${offset}` } : {}),
+      ...(region.kind === 'file' ? { fileKey: pageCacheKey(region, region.startPage + offset) } : {}),
     }))),
     kernelObjects: [{ id: 'listen:8000', kind: 'socket', offset: 0 }],
     events: [{ kind: 'start', source: 'model', step: 0, pid: 4100,
@@ -56,6 +56,8 @@ export function initialWorld(): WorldState {
 export function sharers(world: WorldState, frameId: number): number {
   return world.processes.reduce((count, process) => count + process.pages.filter(id => id === frameId).length, 0);
 }
+/** A file page's page-cache key: its file and its offset within the mapping. */
+export const pageCacheKey = (region: RegionState, page: number) => `${region.fileKey}:${page - region.startPage}`;
 export function regionForPage(process: ProcessState, page: number): RegionState | undefined {
   return process.regions.find(region => page >= region.startPage && page < region.startPage + region.pageCount);
 }
@@ -115,11 +117,11 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
       const region = regionForPage(parent, page);
       return id !== null && region && forkCopiesEntries(world, parent, region) ? id : null;
     });
-    const skipped = residentPages(parent) - pages.filter(id => id !== null).length;
+    const copied = pages.filter(id => id !== null).length, skipped = residentPages(parent) - copied, objects = parent.descriptors.length;
     world.processes.push({ ...parent, pid, parentPid: parent.pid, role: 'worker', pages,
       regions: parent.regions.map(r => ({ ...r })), descriptors: parent.descriptors.map(fd => ({ ...fd })),
       threadIds: [pid], locks: parent.locks.map(lock => ({ ...lock })) });
-    add({ kind: 'fork', pid, description: `PID ${pid} forks from ${parent.pid}. Anonymous frames and kernel objects remain shared; only the calling thread survives.${skipped ? ` ${skipped} file-backed page${skipped === 1 ? ' is' : 's are'} not resident in the child until it touches ${skipped === 1 ? 'it' : 'them'}.` : ''}` });
+    add({ kind: 'fork', pid, description: `PID ${pid} forks from ${parent.pid}. It shares ${copied} of the parent’s frames${objects ? ` and ${objects === 1 ? 'its kernel object' : `its ${objects} kernel objects`}` : ''}; only the calling thread survives.${skipped ? ` ${skipped} file-backed page${skipped === 1 ? ' is' : 's are'} not resident in the child until it touches ${skipped === 1 ? 'it' : 'them'}.` : ''}` });
   } else if (action.type === 'read' || action.type === 'write') {
     const process = running(action.pid), page = action.page ?? 2, write = action.type === 'write';
     const region = regionForPage(process, page);
@@ -142,7 +144,7 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     let fault: 'minor_fault' | 'major_fault' | null = null;
     if (oldId === null) {
       // A file page outside this process's page table: map the page-cache frame, reading it from disk if absent.
-      const fileKey = `${region.fileKey}:${page - region.startPage}`;
+      const fileKey = pageCacheKey(region, page);
       let cached = world.frames.find(item => item.fileKey === fileKey);
       fault = cached ? 'minor_fault' : 'major_fault';
       if (!cached) {
@@ -154,24 +156,25 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     }
     const frame = world.frames.find(item => item.id === oldId);
     if (!frame) throw Error(`Missing frame ${oldId}`);
+    const count = sharers(world, oldId);
     const faultNote = fault === 'minor_fault' ? ' It was already in the page cache, so a minor fault maps it.' : fault === 'major_fault' ? ' A major fault reads it from disk into the page cache.' : '';
     if (!write) {
       add({ kind: fault ?? 'read', pid: process.pid, frameId: oldId, description: fault
         ? `PID ${process.pid} touches file page ${page}.${faultNote} RSS grows${fault === 'minor_fault' ? '; physical memory does not' : ''}.`
         : `PID ${process.pid} reads virtual page ${page}; its mapping and frame are unchanged.` });
-    } else if (region.sharing === 'private' && (frame.kind === 'file' || sharers(world, oldId) > 1)) {
+    } else if (region.sharing === 'private' && (frame.kind === 'file' || count > 1)) {
       const newId = world.nextFrameId++;
       world.frames.push({ id: newId, region: region.name, kind: 'anonymous', owner: process.pid, revision: frame.revision + 1 });
       process.pages[page] = newId;
       if (page === 2) process.counter++;
       releaseUnused(world);
       add({ kind: 'cow_fault', pid: process.pid, frameId: oldId, newFrameId: newId,
-        description: `PID ${process.pid} writes 8 bytes to private page ${page}.${faultNote} One ${kib} KiB page is copied${fault ? '' : '; RSS is unchanged'}.` });
+        description: `PID ${process.pid} writes 8 bytes to page ${page} of a private mapping.${faultNote} ${count > 1 ? `${count} mappings share its frame` : 'Its frame belongs to the page cache'}, so the kernel copies one ${kib} KiB page${fault ? '' : '; RSS is unchanged'}.` });
     } else {
       if (page === 2) process.counter++;
       frame.revision++;
       add({ kind: 'write', pid: process.pid, frameId: oldId,
-        description: region.sharing === 'shared' ? `PID ${process.pid} writes shared page ${page}.${faultNote} Other mappers see the change.` : `PID ${process.pid} writes exclusive page ${page}; its frame is reused.` });
+        description: region.sharing === 'shared' ? `PID ${process.pid} writes page ${page} of a shared mapping.${faultNote} ${count > 1 ? 'Every other mapping of it sees the change.' : 'No other mapping has the page.'}` : `PID ${process.pid} writes exclusive page ${page}; its frame is reused.` });
     }
   } else if (action.type === 'mmap') {
     const process = running(action.pid);
@@ -204,14 +207,15 @@ export function applyAction(previous: WorldState, action: Action): WorldState {
     const object = world.kernelObjects.find(item => item.id === descriptor.objectId);
     if (!object || object.kind !== 'file') throw Error(`FD ${action.fd} is not a file`);
     if (!Number.isSafeInteger(action.bytes) || action.bytes < 0) throw Error('Read size must be a non-negative integer');
-    const before = object.offset; object.offset += action.bytes;
-    add({ kind: 'file_read', pid: process.pid, description: `PID ${process.pid} reads ${action.bytes} bytes on fd ${action.fd}; shared file offset moves from ${before} to ${object.offset}.` });
+    const before = object.offset, holders = objectRefCount(world, object.id); object.offset += action.bytes;
+    add({ kind: 'file_read', pid: process.pid, description: `PID ${process.pid} reads ${action.bytes} bytes on fd ${action.fd}; the file offset${holders > 1 ? `, shared by ${holders} descriptors,` : ''} moves from ${before} to ${object.offset}.` });
   } else if (action.type === 'close_fd') {
     const process = running(action.pid), descriptor = process.descriptors.find(fd => fd.fd === action.fd);
     if (!descriptor) throw Error(`FD ${action.fd} is not open in PID ${process.pid}`);
     process.descriptors = process.descriptors.filter(fd => fd !== descriptor);
     releaseUnused(world);
-    add({ kind: 'close', pid: process.pid, description: `PID ${process.pid} closes fd ${action.fd}. Other inherited descriptors still refer to the same object.` });
+    const remaining = objectRefCount(world, descriptor.objectId);
+    add({ kind: 'close', pid: process.pid, description: `PID ${process.pid} closes fd ${action.fd}. ${remaining ? `${remaining} other descriptor${remaining === 1 ? ' still refers' : 's still refer'} to the same object.` : 'It was the last descriptor for the object, so the kernel releases it.'}` });
   } else if (action.type === 'spawn_thread') {
     const process = running(action.pid), tid = world.nextTid++;
     process.threadIds.push(tid);

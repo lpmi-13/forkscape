@@ -112,6 +112,27 @@ test('inherited descriptors share an offset and close independently', () => {
   assertInvariants(world);
 });
 
+test('events call an offset, page, or object shared only when another descriptor or mapping holds it', () => {
+  const steps: [Action, RegExp][] = [
+    [{ type: 'open_file', pid: 4100, name: 'sample.log' }, /opens sample\.log on fd 4/],
+    [{ type: 'read_file', pid: 4100, fd: 4, bytes: 16 }, /; the file offset moves from 0 to 16\./],
+    [{ type: 'mmap', pid: 4100, name: 'shared.data', pageCount: 1, kind: 'file', sharing: 'shared', fileKey: 'shared.data' }, /maps 1 file page/],
+    [{ type: 'write', pid: 4100, page: 6 }, /No other mapping has the page\./],
+    [{ type: 'fork', parentPid: 4100 }, /It shares 4 of the parent’s frames and its 2 kernel objects; .* 3 file-backed pages are not resident/],
+    [{ type: 'read', pid: 4101, page: 6 }, /minor fault/],
+    [{ type: 'write', pid: 4101, page: 6 }, /Every other mapping of it sees the change\./],
+    [{ type: 'read_file', pid: 4101, fd: 4, bytes: 16 }, /the file offset, shared by 2 descriptors, moves from 16 to 32\./],
+    [{ type: 'write', pid: 4101, page: 2 }, /2 mappings share its frame, so the kernel copies one 4 KiB page; RSS is unchanged\./],
+    [{ type: 'close_fd', pid: 4101, fd: 4 }, /1 other descriptor still refers to the same object\./],
+    [{ type: 'close_fd', pid: 4100, fd: 4 }, /It was the last descriptor for the object, so the kernel releases it\./],
+  ];
+  steps.reduce((world, [action, description]) => {
+    const next = apply(world, action);
+    assert.match(next.events.at(-1)!.description, description);
+    return next;
+  }, initialWorld());
+});
+
 test('fork keeps one thread and copies a lock held by a missing thread', () => {
   let world = applyAction(initialWorld(), { type: 'spawn_thread', pid: 4100 });
   const tid = world.processes[0].threadIds[1];

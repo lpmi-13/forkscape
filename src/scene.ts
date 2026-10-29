@@ -286,7 +286,7 @@ export class ForkScene {
           stack.userData.selection = { kind: 'structure', pid: process.pid, part: 'stack', index: 0 } satisfies SceneSelection;
           this.pickables.push(stack);
         }
-        this.label(process.role === 'master' ? `fork() → ${world.processes.find(p => p.parentPid === process.pid)?.pid ?? 'PID'}` : 'fork() → 0',
+        this.label(process.role === 'master' ? `fork() → ${world.processes.filter(p => p.parentPid === process.pid).map(p => p.pid).join(', ')}` : 'fork() → 0',
           new THREE.Vector3(x + 2.35, y + .78, z - .55), 4, 'scene-label-small');
       }
       // Every mapped page gets a tile; a page with no frame behind it is a faint tile with no filament.
