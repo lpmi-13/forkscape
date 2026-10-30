@@ -61,6 +61,10 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 .inspector-rung p{color:#f6e7dd}
 .inspector-rung code{color:#a1efc9}
 .inspector-rung small{color:#b9c5d3}
+/* A mapping's attributes, in the measurement code's mint because they name what /proc reports. Filled with no outline, so they read as labels, not as the outlined buttons beside them. */
+.traits{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;padding:0;list-style:none}
+.traits li{padding:2px 8px;border-radius:3px;background:#a1efc924;color:#a1efc9;font:500 var(--text-sm)/1.45 'Fredoka',sans-serif}
+.selection-detail .traits{margin:0 0 8px}
 .timeline-controls button{background:#504176;border:2px solid #bd83b5;color:#ffecce;box-shadow:2px 2px 0 #171d3a}
 .timeline-controls input{accent-color:#ffc675}
 .timeline-controls span{color:#e8d5d7}

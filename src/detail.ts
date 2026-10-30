@@ -4,7 +4,9 @@ import type { StructurePart } from './scene';
 export const escapeHtml = (value: string | number) => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 export const kb = (bytes: number) => `${Number.isInteger(bytes / 1024) ? bytes / 1024 : (bytes / 1024).toFixed(1)} KiB`;
 export const regionPages = (region: RegionState) => Array.from({ length: region.pageCount }, (_, offset) => region.startPage + offset);
-const pageTableKiB = (state: WorldState, process: ProcessState) => process.status === 'running' ? state.pageSize * (1 + new Set(process.pages.flatMap((id, index) => id === null ? [] : [Math.floor(index / 512)])).size) : 0;
+// A mapping's attributes as a row of tags, so they read apart from the prose that explains them.
+const traitList = (traits: string[]) => `<ul class="traits">${traits.map(trait => `<li>${trait}</li>`).join('')}</ul>`;
+const pageTableKiB =(state: WorldState, process: ProcessState) => process.status === 'running' ? state.pageSize * (1 + new Set(process.pages.flatMap((id, index) => id === null ? [] : [Math.floor(index / 512)])).size) : 0;
 
 export type Selection = { pid: number; page: { pid: number; page: number } | null; frame: number | null; objectId: string | null; structure: { pid: number; part: StructurePart; index: number } | null };
 // What the inspector, and the selection card over the scene, say about the current selection.
@@ -32,7 +34,7 @@ function pageDetail(state: WorldState, process: ProcessState, page: number, regi
   return {
     title: `Virtual page <em>${page}</em>`, summary: `PID ${process.pid} → ${frame ? `frame F${frame.id}` : 'not resident'}`,
     metaphor: `<p>${frame ? `A tile on PID ${process.pid}'s deck. Its thin line runs to frame F${frame.id} on the floor: the page-table entry that maps this page.` : 'A faint tile with no line: the address is mapped, but no frame stands behind it yet.'}</p>`,
-    mechanism: `<p>${escapeHtml(region.name)} · ${region.kind} · ${region.sharing} mapping · ${region.writable ? 'writable' : 'read-only'}. ${residency} ${nextWrite}</p><p>${accounting}</p>${frame ? `<p>Model write revision: ${frame.revision}.</p>` : ''}`,
+    mechanism: `${traitList([escapeHtml(region.name), region.kind === 'file' ? 'file-backed' : 'anonymous', `${region.sharing} mapping`, region.writable ? 'writable' : 'read-only'])}<p>${residency} ${nextWrite}</p><p>${accounting}</p>${frame ? `<p>Model write revision: ${frame.revision}.</p>` : ''}`,
     measurement: `<code>/proc/${process.pid}/smaps: Rss, Private_Dirty · /proc/${process.pid}/pagemap</code><small>Residency per mapping is in smaps; the exact frame needs privileged pagemap access. This mapping is modeled.</small>`,
     actions: frame ? `<button type="button" data-frame="${frame.id}" class="subtle">Inspect frame F${frame.id}</button>` : '',
   };
