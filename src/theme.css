@@ -85,10 +85,11 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 .flat-frame strong{color:#b9ffc4}
 .flat-frame small,.flat-note{color:#e2e4d8}
 @media(min-width:900px){.workspace.panel-open .scene-column{border-left:2px solid #765b91}}
-@media(max-width:899px){.workspace.panel-open .scene-column{border-top:2px solid #765b91}}
+@media(max-width:899px){.drawer-panel{border-top:2px solid #765b91}}
 @media(max-width:760px){.scene-label{padding:1px 3px;letter-spacing:0}.frame-label{padding:1px 2px}}
-/* The smallest phones: the corner controls keep apart, and the step counter takes its own line above Back and Next. */
-@media(max-width:400px){.menu-toggle{gap:8px;padding-right:12px}.view-toggle{padding:0 10px;font-size:var(--text-sm)}#scenario-content{padding:0 16px 24px}.stepper-controls{flex-wrap:wrap}.step-count{order:-1;flex-basis:100%;text-align:center}}
+/* The smallest phones: the corner controls keep apart, and below 340px the step counter takes its own line above Back and Next. */
+@media(max-width:400px){.menu-toggle{gap:8px;padding-right:12px}.view-toggle{padding:0 10px;font-size:var(--text-sm)}#scenario-content{padding:0 16px 24px}}
+@media(max-width:340px){.stepper-controls{flex-wrap:wrap}.step-count{order:-1;flex-basis:100%;text-align:center}}
 @media(prefers-reduced-motion:reduce){button,.menu-caret{transition:none}button:hover:not(:disabled){transform:none}}
 
 .lesson-stage{margin-top:18px;padding-top:13px;border-top:1px dashed #806b94}
@@ -235,3 +236,44 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 .selection-detail p{margin:0 0 8px;color:#f6e7dd;font-size:var(--text-md);line-height:1.5}
 .selection-detail p:last-child{margin-bottom:0}
 #open-inspector{align-self:flex-start}
+
+/* Narrow screens: the scenario panel is a sheet under the scene, like a music player's bar. Collapsed, it shows its head and its dock: the
+   step's caption over Back and Next, or the last event over the lab's actions. Expanded, it fills the screen below the corner controls,
+   with the head pinned to its top and the dock to its bottom, and the step's model detail moves in with the notes. */
+.sheet-toggle,.sheet-close,.step-detail{display:none}
+@media(max-width:899px){
+.lesson-rail{max-height:calc(100% - 68px)}
+.lesson-rail.sheet-expanded{height:calc(100% - 68px)}
+.lesson-rail>.panel-heading{display:none}
+#scenario-content{display:flex;flex-direction:column;min-height:100%;padding:0 16px}
+#scenario-content>*{flex-shrink:0}
+.lesson-rail:not(.sheet-expanded) #scenario-content>:not(.sheet-head,.stepper,.lab-dock){display:none}
+.sheet-head{order:-1;position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:8px;margin:0 -16px;padding:16px 10px 8px 16px;border-bottom:2px solid #605579;background:#2b2a4c;cursor:pointer;touch-action:none}
+.sheet-head::before{content:'';position:absolute;top:6px;left:50%;width:2.5rem;height:4px;margin-left:-1.25rem;border-radius:2px;background:#8a6caa}
+.lesson-rail .sheet-head h1{flex:1;min-width:0;margin:0;font-size:var(--text-xl);line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lesson-rail.sheet-expanded .sheet-head h1{white-space:normal}
+.lesson-rail.sheet-expanded #scenario-content::after{content:'';flex:none;height:24px}
+.sheet-toggle,.sheet-close{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;padding:0}
+.sheet-toggle{border:2px solid #8a6caa;border-radius:4px;background:#2e3158;color:#fce8d3;box-shadow:2px 2px 0 #151731}
+@media(hover:hover){.sheet-toggle:hover{background:#684274;color:#fff7dc}}
+.sheet-toggle svg{width:15px;height:9px;transform:rotate(180deg)}
+.sheet-toggle[aria-expanded="true"] svg{transform:none}
+.back-link{align-self:flex-start}
+.symptom{margin-bottom:0}
+.step-detail{display:block;margin-top:18px}
+.step-detail p{margin:8px 0 0;font:var(--text-sm)/1.5 'DM Mono',monospace;color:#c9c3dc}
+/* An expanded sheet covers the scene, which would show only a sliver behind the corner controls. */
+.workspace.sheet-expanded .scene-column{visibility:hidden}
+.step-event{display:none}
+.stepper,.lab-dock{order:1;position:sticky;bottom:0;z-index:3;display:flex;flex-direction:column;margin:auto -16px 0;padding:12px 16px 14px;border:0;border-top:2px solid #e987a5;border-radius:0;background:#382c57;box-shadow:none}
+.step-slides{order:-1}
+.step-caption{margin:0 0 12px}
+.stepper-controls button{min-height:2.75rem}
+.lab-dock .last-event{order:-1;margin:0}
+.lab-dock .last-event h2{display:none}
+.lab-dock .last-event p{min-height:4.5em;margin:0;color:#fff5de}
+.lab-dock .action-error:empty{display:none}
+.lab-dock .lab-actions{display:grid;grid-template-columns:1fr 1fr;margin:12px 0 0}
+.lab-dock .lab-actions button{min-height:2.75rem}
+.lesson-rail .lesson-kicker{margin-top:14px}
+}

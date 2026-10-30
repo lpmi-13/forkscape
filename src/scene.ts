@@ -21,6 +21,55 @@ const palette = [0x64debc, 0x93dfff, 0xff91a6, 0xf7bc79];
 const baseFov = 38;
 const fitAspect = 1.3;
 const kernelY = 1.75;
+// Boxes around everything the scene can draw: the floor slab up to the kernel layer, the master's deck with its fork stack, and the worker decks. Framing fits all of them, so a scenario's later workers never need a new camera.
+const stageCorners = [
+  [[-5.65, -.36, -3.9], [5.65, kernelY, 3.9]],
+  [[-2.9, 3.7, -3.45], [2.9, 4.7, -1.05]],
+  [[-5.95, 2.85, .95], [5.95, 3.8, 3.35]],
+].flatMap(([min, max]) => Array.from({ length: 8 }, (_, bits) => new THREE.Vector3(bits & 1 ? max[0] : min[0], bits & 2 ? max[1] : min[1], bits & 4 ? max[2] : min[2])));
+const stageCentre = new THREE.Vector3(0, 2.17, 0);
+// The overview looks down on the stage from the front right. A tall scene turns toward the stage's long side and looks down more steeply,
+// so the decks sit above columns of frames and the stage fills the scene's height as well as its width. Between the two, the view blends.
+const wideView = { azimuth: Math.atan2(9.5, 13.5), elevation: Math.atan2(7.3, Math.hypot(9.5, 13.5)) };
+const tallView = { azimuth: THREE.MathUtils.degToRad(72), elevation: THREE.MathUtils.degToRad(38) }, tallAspect = .6;
+const overviewDirection = (aspect: number) => {
+  const tallness = THREE.MathUtils.clamp((fitAspect - aspect) / (fitAspect - tallAspect), 0, 1);
+  const elevation = THREE.MathUtils.lerp(wideView.elevation, tallView.elevation, tallness);
+  return new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - elevation, THREE.MathUtils.lerp(wideView.azimuth, tallView.azimuth, tallness));
+};
+// Pixels kept clear between the stage and the scene's edges, and above the stage for the master deck's labels.
+const edgeGap = 12, labelRoom = 24;
+
+/** The overview camera that fits the whole stage in a width × height scene whose top `coveredTop` pixels lie under the page's controls. */
+export function stageView(width: number, height: number, coveredTop = 0) {
+  const aspect = width / height;
+  // Widen the vertical field on tall scenes, so the camera need not back away into the fog to fit the floor's width.
+  const fov = aspect >= fitAspect ? baseFov : THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(baseFov / 2)) * fitAspect / aspect));
+  const tanY = Math.tan(THREE.MathUtils.degToRad(fov / 2)), tanX = tanY * aspect;
+  // The part of the scene the stage may fill, in normalised device coordinates. A scene too small for the gaps uses all of itself.
+  const topGap = Math.max(coveredTop, edgeGap) + labelRoom;
+  const [left, right, bottom, top] = width > 8 * edgeGap && height > 2 * (topGap + edgeGap)
+    ? [-1 + 2 * edgeGap / width, 1 - 2 * edgeGap / width, -1 + 2 * edgeGap / height, 1 - 2 * topGap / height] : [-1, 1, -1, 1];
+  const overview = overviewDirection(aspect);
+  const across = new THREE.Vector3().crossVectors(THREE.Object3D.DEFAULT_UP, overview).normalize();
+  const up = new THREE.Vector3().crossVectors(overview, across);
+  const points = stageCorners.map(corner => { const offset = corner.clone().sub(stageCentre); return { x: offset.dot(across), y: offset.dot(up), toward: offset.dot(overview) }; });
+  // For a camera this far back, the range of sideways or vertical shifts that keeps every corner inside the usable part of the scene.
+  const shifts = (distance: number, axis: 'x' | 'y', low: number, high: number, tan: number) => points.reduce(([min, max], point) => {
+    const reach = tan * (distance - point.toward);
+    return [Math.max(min, point[axis] - high * reach), Math.min(max, point[axis] - low * reach)];
+  }, [-Infinity, Infinity]);
+  const ranges = (distance: number) => [shifts(distance, 'x', left, right, tanX), shifts(distance, 'y', bottom, top, tanY)];
+  // The stage only gets easier to fit from farther back, so bisection finds the closest camera that fits.
+  let near = Math.max(...points.map(point => point.toward)) + .5, far = 200;
+  for (let index = 0; index < 40; index++) {
+    const middle = (near + far) / 2;
+    if (ranges(middle).every(([min, max]) => min <= max)) far = middle; else near = middle;
+  }
+  const [x, y] = ranges(far).map(([min, max]) => (min + max) / 2);
+  const target = stageCentre.clone().addScaledVector(across, x).addScaledVector(up, y);
+  return { fov, distance: far, target, position: target.clone().addScaledVector(overview, far) };
+}
 export type StructurePart = 'cable' | 'page_table' | 'thread' | 'stack';
 type LabelBox = { left: number; top: number; right: number; bottom: number };
 export type SceneSelection = { kind: 'process'; pid: number } | { kind: 'page'; pid: number; page: number } | { kind: 'frame'; frameId: number } | { kind: 'object'; objectId: string } | { kind: 'structure'; pid: number; part: StructurePart; index: number };
@@ -47,6 +96,7 @@ export class ForkScene {
   private selectedObjectId: string | null = null;
   private selectedStructure: { pid: number; part: StructurePart; index: number } | null = null;
   private pressedAt: [number, number] | null = null;
+  private framed = { position: new THREE.Vector3(), target: new THREE.Vector3() };
   /** Adds each process's RSS and PSS to its label; read on the next setWorld. */
   showAccounting = false;
 
@@ -59,18 +109,12 @@ export class ForkScene {
     this.renderer.domElement.setAttribute('aria-label', '3D scene of process decks, page tiles, physical frames, and kernel objects. Switch to the flat view to reach each one by keyboard.');
     host.appendChild(this.renderer.domElement);
     this.scene.fog = new THREE.Fog(0x1b1838, 15, 30);
-    this.camera.position.set(9.5, 8.5, 13.5);
-    this.camera.lookAt(0, 1.4, 0);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.target.set(0, 1.2, 0);
     this.controls.enableDamping = true;
     this.controls.enableDamping = !this.motionPreference.matches;
     this.motionPreference.addEventListener('change', this.updateMotion);
     this.controls.addEventListener('change', this.renderFrame);
-    this.controls.minDistance = 8;
-    this.controls.maxDistance = 25;
     this.controls.maxPolarAngle = Math.PI / 2.05;
-    this.controls.update();
     this.scene.add(new THREE.HemisphereLight(0xc8e9ff, 0x593355, 2.3));
     const sun = new THREE.DirectionalLight(0xffdeb0, 2.5);
     sun.position.set(4, 10, 6);
@@ -86,7 +130,7 @@ export class ForkScene {
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(host);
     document.fonts.addEventListener('loadingdone', this.renderFrame);
-    this.resize();
+    this.fitView();
   }
 
   setWorld(world: WorldState, selectedPid: number, selectedPage: { pid: number; page: number } | null, selectedFrame: number | null, selectedObjectId: string | null, selectedStructure: { pid: number; part: StructurePart; index: number } | null, onSelect: (selection: SceneSelection) => void) {
@@ -102,10 +146,13 @@ export class ForkScene {
     this.renderFrame();
   }
 
+  /** Frames the whole stage in the scene's current size. */
+  fitView() { this.layout(true); }
+
   setCameraPreset(preset: 'overview' | 'process' | 'memory') {
+    if (preset === 'overview') { this.fitView(); return; }
     if (preset === 'memory') { this.camera.position.set(6, 4, 8); this.controls.target.set(0, .2, 0); }
-    else if (preset === 'process') { this.camera.position.set(5, 6.35, 8); this.controls.target.set(0, 3.05, 0); }
-    else { this.camera.position.set(9.5, 8.5, 13.5); this.controls.target.set(0, 1.2, 0); }
+    else { this.camera.position.set(5, 6.35, 8); this.controls.target.set(0, 3.05, 0); }
     this.controls.update();
   }
 
@@ -116,15 +163,28 @@ export class ForkScene {
     this.controls.update();
   }
 
-  private resize = () => {
+  // A camera the reader hasn't moved since it was framed is framed again for the scene's new size.
+  private resize = () => this.layout(this.camera.position.distanceTo(this.framed.position) < 1e-4 && this.controls.target.distanceTo(this.framed.target) < 1e-4);
+
+  private layout(refit: boolean) {
     const width = Math.max(this.host.clientWidth, 1), height = Math.max(this.host.clientHeight, 1);
+    // The page's corner controls float over the top of the scene, unless the layout places the scene below them.
+    const view = stageView(width, height, parseFloat(getComputedStyle(this.host).getPropertyValue('--covered-top')) || 0);
     this.camera.aspect = width / height;
-    // Widen the vertical field on tall viewports so the floor's full width stays in frame.
-    this.camera.fov = this.camera.aspect >= fitAspect ? baseFov : THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(baseFov / 2)) * fitAspect / this.camera.aspect));
+    this.camera.fov = view.fov;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    if (refit) {
+      // Zoom limits follow the framing, so the closest and farthest views keep their proportions on every screen.
+      this.controls.minDistance = view.distance * .45;
+      this.controls.maxDistance = view.distance * 1.4;
+      this.camera.position.copy(view.position);
+      this.controls.target.copy(view.target);
+      this.controls.update();
+      this.framed = { position: this.camera.position.clone(), target: this.controls.target.clone() };
+    }
     this.renderFrame();
-  };
+  }
 
   private updateMotion = () => {
     this.controls.enableDamping = !this.motionPreference.matches;

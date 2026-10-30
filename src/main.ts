@@ -31,6 +31,9 @@ let openPanel: PanelId | null = 'scenarios';
 let menuOpen = false;
 let selectionCardOpen = false;
 let accountingOpen = false;
+// On narrow screens the scenario panel is a sheet under the scene: collapsed to its head and dock, or expanded to everything.
+let sheetExpanded = false;
+const narrow = matchMedia('(max-width: 899px)');
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 const world = () => history[step];
@@ -44,11 +47,15 @@ const sumOf = (state: WorldState, key: 'rss' | 'pss') => memoryRows(state).reduc
 // The RSS/PSS comparison is shown when a scenario depends on it, or when the reader opens it.
 const accountingVisible = () => mode.kind === 'scenario' ? !!mode.scenario.accounting || mode.scenario.group === 'memory' && accountingOpen : mode.kind === 'sandbox' && accountingOpen;
 
+const caret = '<svg viewBox="0 0 5 3" width="10" height="6" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="M0 0h5v1H4v1H3v1H2V2H1V1H0z"/></svg>';
+// The sheet's head names what the panel shows. On narrow screens it carries the sheet's expand and close buttons.
+const sheetHead = (title: string, more: string) => `<div class="sheet-head"><h1 tabindex="-1">${escapeHtml(title)}</h1><button id="sheet-toggle" class="sheet-toggle" type="button" aria-expanded="${sheetExpanded}" aria-controls="scenario-content" aria-label="${more}">${caret}</button><button class="panel-close sheet-close" type="button" data-close-panel aria-label="Close scenarios">×</button></div>`;
+
 const drawer = (id: PanelId, meta: string, body: string, className = '', metaId = '') => `<section class="drawer-panel ${className}" data-panel-id="${id}" aria-label="${escapeHtml(panelLabels[id])}" tabindex="-1" hidden><div class="panel-heading"><span>${escapeHtml(panelLabels[id])}</span><span class="panel-meta"${metaId ? ` id="${metaId}"` : ''}>${meta}</span><button class="panel-close" type="button" data-close-panel aria-label="Close ${escapeHtml(panelLabels[id].toLowerCase())}">×</button></div>${body}</section>`;
 
 root.innerHTML = `
   <div class="menu-dock">
-    <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Forkscape menu" aria-expanded="false" aria-controls="panel-menu"><img class="brand-mark" src="/favicon.svg" alt="" width="32" height="32" /><span class="brand">FORKSCAPE</span><svg class="menu-caret" viewBox="0 0 5 3" width="10" height="6" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="M0 0h5v1H4v1H3v1H2V2H1V1H0z"/></svg></button>
+    <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Forkscape menu" aria-expanded="false" aria-controls="panel-menu"><img class="brand-mark" src="/favicon.svg" alt="" width="32" height="32" /><span class="brand">FORKSCAPE</span>${caret.replace('<svg', '<svg class="menu-caret"')}</button>
     <nav id="panel-menu" class="panel-menu" aria-label="Panels" hidden><div class="menu-heading"><span>A process memory lab</span><span class="badge">Model</span></div>${(Object.keys(panelLabels) as PanelId[]).map(id => `<button type="button" data-panel="${id}" aria-pressed="false">${escapeHtml(panelLabels[id])}</button>`).join('')}</nav>
   </div>
   <button id="view-toggle" class="view-toggle" type="button"></button>
@@ -77,7 +84,12 @@ function renderChrome() {
   root.querySelector<HTMLElement>('[data-panel="timeline"]')!.hidden = !hasTimeline();
   root.querySelectorAll<HTMLElement>('[data-panel]').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.panel === openPanel)));
   root.querySelectorAll<HTMLElement>('[data-panel-id]').forEach(panel => { panel.hidden = panel.dataset.panelId !== openPanel; });
-  root.querySelector('.workspace')!.classList.toggle('panel-open', openPanel !== null);
+  // Opening or closing a panel resizes the scene, so the camera frames the whole model again.
+  const workspace = root.querySelector('.workspace')!;
+  if (workspace.classList.contains('panel-open') !== (openPanel !== null)) { workspace.classList.toggle('panel-open'); scene?.fitView(); }
+  root.querySelector('[data-panel-id="scenarios"]')!.classList.toggle('sheet-expanded', sheetExpanded);
+  workspace.classList.toggle('sheet-expanded', openPanel === 'scenarios' && sheetExpanded);
+  root.querySelector('#sheet-toggle')?.setAttribute('aria-expanded', String(sheetExpanded));
   // The inspector says everything the card does, so the card gives way to it.
   const card = root.querySelector<HTMLElement>('#selection-card')!;
   card.hidden = !selectionCardOpen || openPanel === 'inspector';
@@ -102,6 +114,11 @@ async function ensureScene() {
   finally { sceneLoading = false; }
 }
 
+// A new scenario, mode, model, or view starts from the whole model. Stepping, selecting, and acting keep the reader's camera and scroll position.
+function resetView() {
+  scene?.fitView();
+  root.querySelector('#flat-host')!.scrollTop = 0;
+}
 function clearSelection() { selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; }
 function focusScenarioStep(scenario: Scenario) {
   const focus = stepFocus(scenario, step, world());
@@ -129,14 +146,17 @@ function applyHash(userNavigation: boolean) {
     mode = { kind: 'library' }; history = [initialWorld()]; step = 0; selectedPid = 4100; clearSelection();
   }
   if (userNavigation) openPanel = 'scenarios';
+  // The library is a list to choose from, so its sheet opens expanded; a scenario or free exploration opens on the scene.
+  sheetExpanded = mode.kind === 'library';
   render();
+  resetView();
   if (userNavigation) root.querySelector<HTMLElement>('#scenario-content h1')?.focus({ preventScroll: true });
   root.querySelector('[data-panel-id="scenarios"]')!.scrollTop = 0;
 }
 
 function renderLibrary() {
   const card = (scenario: Scenario) => `<li><a class="scenario-card" href="#${scenario.id}"><strong>${escapeHtml(scenario.title)}</strong><span>${escapeHtml(scenario.symptom)}</span>${scenario.accounting ? '<em class="card-tag">RSS vs PSS</em>' : ''}</a></li>`;
-  return `<div class="lesson-kicker">Scenario library</div><h1 tabindex="-1">Fork and memory problems, replayed</h1>
+  return `<div class="lesson-kicker">Scenario library</div>${sheetHead('Fork and memory problems, replayed', 'Scenario list')}
     <p class="lesson-body">Each scenario replays a production problem in a model of a Gunicorn master and its workers. Step through it and watch the scene, then select any process, page, or frame to see how it works.</p>
     ${(Object.keys(groupLabels) as (keyof typeof groupLabels)[]).map(group => `<h2 class="section-tag">${escapeHtml(groupLabels[group])}</h2><ul class="scenario-list">${scenarios.filter(scenario => scenario.group === group).map(card).join('')}</ul>`).join('')}
     <a class="sandbox-link" href="#explore"><strong>Free exploration</strong><span>Start from a master process and change the model yourself.</span></a>`;
@@ -258,8 +278,9 @@ function renderScenario(scenario: Scenario) {
   const states = history, index = scenarios.filter(item => item.group === scenario.group).indexOf(scenario) + 1;
   const total = scenarios.filter(item => item.group === scenario.group).length;
   return `<a class="back-link" href="#scenarios"><span aria-hidden="true">←</span> All scenarios</a>
-    <div class="lesson-kicker">${escapeHtml(groupLabels[scenario.group])} · ${index} of ${total}</div><h1 tabindex="-1">${escapeHtml(scenario.title)}</h1>
+    <div class="lesson-kicker">${escapeHtml(groupLabels[scenario.group])} · ${index} of ${total}</div>${sheetHead(scenario.title, 'Scenario details')}
     <p class="symptom">${escapeHtml(scenario.symptom)}</p>
+    <div class="step-detail"><h2 class="section-tag">This step</h2><p>${escapeHtml(states[step].events.at(-1)!.description)}</p></div>
     <div class="stepper">
       <div class="stepper-controls"><button id="scenario-prev" type="button" ${step === 0 ? 'disabled' : ''}><span aria-hidden="true">◀</span> Back</button><span class="step-count">Step ${step + 1} / ${states.length}</span><button id="scenario-next" class="step-next" type="button" ${step === states.length - 1 ? 'disabled' : ''}>Next <span aria-hidden="true">▶</span></button></div>
       <div class="step-slides">${scenario.steps.map((item, index) => `<div class="step-slide${index === step ? ' is-current' : ''}"><p class="step-caption">${escapeHtml(item.caption)}</p><p class="step-event">${escapeHtml(states[index].events.at(-1)!.description)}</p></div>`).join('')}</div>
@@ -286,13 +307,13 @@ function renderSandbox() {
   const pageRegion = process && page !== null ? regionForPage(process, page) : undefined;
   const button = (label: string, action: string, enabled = true) => `<button type="button" data-lab="${action}" ${enabled ? '' : 'disabled'}>${label}</button>`;
   return `<a class="back-link" href="#scenarios"><span aria-hidden="true">←</span> All scenarios</a>
-    <div class="lesson-kicker">Free exploration</div><h1 tabindex="-1">Change the model yourself</h1>
+    <div class="lesson-kicker">Free exploration</div>${sheetHead('Change the model yourself', 'Model controls and notes')}
     <p class="lesson-body">${sandboxOrigin ? `Started from step ${sandboxOrigin.step + 1} of <a href="#${sandboxOrigin.scenario.id}">${escapeHtml(sandboxOrigin.scenario.title)}</a>. ` : ''}Select a process or page, then act on it. Each action adds a state to the event timeline.</p>
-    <div class="lab-actions">${button('Fork master', 'fork', state.processes[0]?.pid === 4100 && state.processes[0].status === 'running')}${button(page === null ? 'Read a selected page' : `Read page ${page}`, 'read', !!active && page !== null)}${button(page === null ? 'Write a selected page' : `Write page ${page}`, 'write', !!active && page !== null && !!pageRegion?.writable)}${button('Exit selected worker', 'exit', !!worker && !!active)}${button('Reap selected zombie', 'reap', !!worker && !!zombie)}</div>
+    <div class="lab-dock"><div class="lab-actions">${button('Fork master', 'fork', state.processes[0]?.pid === 4100 && state.processes[0].status === 'running')}${button(page === null ? 'Read a selected page' : `Read page ${page}`, 'read', !!active && page !== null)}${button(page === null ? 'Write a selected page' : `Write page ${page}`, 'write', !!active && page !== null && !!pageRegion?.writable)}${button('Exit selected worker', 'exit', !!worker && !!active)}${button('Reap selected zombie', 'reap', !!worker && !!zombie)}</div>
+      <p id="action-error" class="action-error">${escapeHtml(actionError)}</p>
+      <div class="scenario-note last-event"><h2 class="section-tag">Last event</h2><p>${escapeHtml(state.events.at(-1)!.description)}</p></div></div>
     <details class="model-tools"><summary>More model controls</summary><div class="lab-actions">${button('Map 2 anonymous pages', 'map-anon', !!active)}${button('Map shared file page', 'map-file', !!active)}${button('Unmap latest region', 'unmap', !!active && !!process?.regions.some(r => r.id.startsWith('region-')))}${button('Open sample file', 'open', !!active)}${button('Read 16 bytes', 'file-read', !!active && !!openFile)}${button('Close sample file', 'file-close', !!active && !!openFile)}${button('Start thread', 'thread', !!active)}${button('Lock with newest thread', 'lock', !!active && (process?.threadIds.length ?? 0) > 1)}${button('Unlock', 'unlock', !!active && !!heldLock)}${button('Set limit to current use', 'limit')}${button('Remove limit', 'unlimit')}</div></details>
     <button id="reset-model" class="subtle" type="button">Reset model</button>
-    <p id="action-error" class="action-error">${escapeHtml(actionError)}</p>
-    <div class="scenario-note"><h2 class="section-tag">Last event</h2><p>${escapeHtml(state.events.at(-1)!.description)}</p></div>
     ${renderAccountingSection(null)}`;
 }
 
@@ -408,6 +429,8 @@ function selectVisual(selection: SceneSelection) {
   if (selection.kind === 'process' || selection.kind === 'page' || selection.kind === 'structure') selectedPid = selection.pid;
   selectedPage = selection.kind === 'page' ? { pid: selection.pid, page: selection.page } : null;
   selectionCardOpen = true;
+  // A selection is shown in the scene, so an expanded sheet makes way for it.
+  if (narrow.matches) sheetExpanded = false;
   render();
 }
 
@@ -434,6 +457,7 @@ root.addEventListener('click', event => {
   const panelItem = target.closest<HTMLElement>('[data-panel]');
   if (panelItem) { const id = panelItem.dataset.panel as PanelId; showPanel(openPanel === id ? null : id); return; }
   if (target.closest('[data-close-panel]')) { showPanel(null); return; }
+  if (target.closest('.sheet-head') && narrow.matches) { if (!sheetSwiped) { sheetExpanded = !sheetExpanded; renderChrome(); } return; }
   if (target.closest('#close-selection-card')) { selectionCardOpen = false; renderChrome(); return; }
   if (target.closest('#open-inspector')) { showPanel('inspector'); return; }
   if (menuOpen && !target.closest('.menu-dock')) { menuOpen = false; renderChrome(); }
@@ -464,7 +488,7 @@ root.addEventListener('click', event => {
   if (structureButton) { selectVisual({ kind: 'structure', pid: Number(structureButton.dataset.structurePid), part: structureButton.dataset.structure as StructurePart, index: Number(structureButton.dataset.structureIndex) }); return; }
   if (target.closest('#prev-step')) { goToStep(step - 1); return; }
   if (target.closest('#next-step')) { goToStep(step + 1); return; }
-  if (target.closest('#reset-model')) { resetSandbox(initialWorld(), null); selectedPid = 4100; clearSelection(); selectionCardOpen = false; render(); return; }
+  if (target.closest('#reset-model')) { resetSandbox(initialWorld(), null); selectedPid = 4100; clearSelection(); selectionCardOpen = false; render(); resetView(); return; }
   if (target.closest('#clear-selection')) { clearSelection(); render(); return; }
   const actionButton = target.closest<HTMLElement>('[data-lab]');
   if (actionButton && !actionButton.hasAttribute('disabled') && mode.kind === 'sandbox') {
@@ -486,7 +510,22 @@ root.addEventListener('click', event => {
     if (action === 'limit') { runAction({ type: 'set_limit', bytes: chargedBytes(state) }); return; }
     if (action === 'unlimit') { runAction({ type: 'set_limit', bytes: null }); return; }
   }
-  if (target.closest('#view-toggle')) { flat = !flat; try { localStorage.setItem('forkscape-flat', String(flat)); } catch { /* the view still switches */ } render(); }
+  if (target.closest('#view-toggle')) { flat = !flat; try { localStorage.setItem('forkscape-flat', String(flat)); } catch { /* the view still switches */ } render(); resetView(); }
+});
+// Swiping the sheet's head up or down expands or collapses it, as dragging a handle would. The click that can follow a swipe is ignored.
+let sheetSwipeStart: number | null = null, sheetSwiped = false;
+root.addEventListener('pointerdown', event => {
+  sheetSwiped = false;
+  sheetSwipeStart = narrow.matches && (event.target as Element).closest('.sheet-head') ? event.clientY : null;
+});
+root.addEventListener('pointerup', event => {
+  if (sheetSwipeStart === null) return;
+  const distance = event.clientY - sheetSwipeStart;
+  sheetSwipeStart = null;
+  if (Math.abs(distance) < 24) return;
+  sheetSwiped = true;
+  sheetExpanded = distance < 0;
+  renderChrome();
 });
 root.addEventListener('pointerover', event => {
   const target = (event.target as Element).closest<SVGRectElement>('[data-chart-step]');
@@ -503,6 +542,7 @@ document.addEventListener('keydown', event => {
   if (tip) hideChartTip(tip.closest('.chart')!);
   else if (menuOpen) { menuOpen = false; renderChrome(); root.querySelector<HTMLElement>('#menu-toggle')!.focus(); }
   else if (selectionCardOpen && openPanel !== 'inspector') { selectionCardOpen = false; renderChrome(); }
+  else if (narrow.matches && openPanel === 'scenarios' && sheetExpanded) { sheetExpanded = false; renderChrome(); }
   else if (openPanel) showPanel(null);
 });
 root.addEventListener('input', event => {

@@ -8,6 +8,7 @@ await server.listen();
 const address = server.httpServer.address();
 assert.ok(address && typeof address !== 'string');
 const url = `http://127.0.0.1:${address.port}/`;
+const { stageView } = await server.ssrLoadModule('/src/scene.ts');
 const scenarioIds = ['cow-decay', 'leak', 'decay-oom', 'rss-overcount', 'worker-warmup', 'no-preload', 'shared-offset', 'thread-lock'];
 let browser;
 
@@ -15,11 +16,12 @@ async function clickScenePoint(page, x, y, z) {
   const canvas = page.locator('#scene-host canvas');
   const bounds = await canvas.boundingBox();
   assert.ok(bounds, '3D canvas must be visible');
-  const aspect = bounds.width / bounds.height;
-  const fov = aspect >= 1.3 ? 38 : 2 * Math.atan(Math.tan(19 * Math.PI / 180) * 1.3 / aspect) * 180 / Math.PI;
-  const camera = new PerspectiveCamera(fov, aspect, 0.1, 100);
-  camera.position.set(9.5, 8.5, 13.5);
-  camera.lookAt(0, 1.2, 0);
+  // The scene frames itself with stageView, so a target is found from the same camera.
+  const coveredTop = await page.locator('#scene-host').evaluate(host => parseFloat(getComputedStyle(host).getPropertyValue('--covered-top')) || 0);
+  const view = stageView(bounds.width, bounds.height, coveredTop);
+  const camera = new PerspectiveCamera(view.fov, bounds.width / bounds.height, 0.1, 100);
+  camera.position.set(view.position.x, view.position.y, view.position.z);
+  camera.lookAt(view.target.x, view.target.y, view.target.z);
   camera.updateMatrixWorld();
   const point = new Vector3(x, y, z).project(camera);
   assert.ok(Math.abs(point.x) < 1 && Math.abs(point.y) < 1, 'scene target must be in view');
@@ -147,6 +149,8 @@ async function runJourneys(flat) {
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('[data-panel-id]:visible').count(), 0, 'Escape closes the open panel');
 
+  // A zoomed camera is framed again when the mode changes, so the page click below lands where stageView says.
+  if (!flat) { await openPanel(page, 'view'); await page.locator('[data-zoom="in"]').click(); await page.locator('[data-zoom="in"]').click(); }
   await openPanel(page, 'scenarios');
   await page.locator('#explore-here').click();
   await heading(page, 'Change the model yourself');
@@ -200,13 +204,38 @@ async function runPhoneCheck() {
   await page.locator('#scene-host canvas').waitFor();
   const [canvas, host] = await Promise.all([page.locator('#scene-host canvas').boundingBox(), page.locator('#scene-host').boundingBox()]);
   assert.deepEqual([canvas.width, canvas.height], [host.width, host.height], 'the canvas fills the scene on high-DPI screens');
-  const [panel, scene] = await Promise.all([page.locator('[data-panel-id="scenarios"]').boundingBox(), page.locator('#scene-host').boundingBox()]);
-  assert.ok(panel.y + panel.height <= scene.y + 1, 'on phones the scenario panel sits above the scene');
-  assert.ok(await page.locator('[data-panel-id="scenarios"]').evaluate(element => element.scrollWidth <= element.clientWidth), 'the scenario panel does not scroll sideways');
+  const sheet = page.locator('[data-panel-id="scenarios"]');
+  const [panel, scene, caption] = await Promise.all([sheet.boundingBox(), page.locator('#scene-host').boundingBox(), page.locator('.step-slide.is-current .step-caption').boundingBox()]);
+  assert.ok(scene.y + scene.height <= panel.y + 1, 'on phones the scenario sheet sits under the scene');
+  assert.ok(scene.height > 2 * panel.height, 'a scenario opens on the scene, with its sheet collapsed');
+  assert.ok(caption.y >= panel.y && caption.y + caption.height <= 844, 'the first step is readable on arrival without scrolling');
+  assert.equal(await page.locator('.chart').isVisible(), false, 'the collapsed sheet holds only the step');
+  assert.equal(await page.locator('.step-slide.is-current .step-event').isVisible(), false, 'the step detail waits in the expanded sheet');
+
+  await page.locator('#sheet-toggle').click();
+  assert.equal(await page.locator('#sheet-toggle').getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.locator('.chart').isVisible(), true, 'expanding the sheet shows the notes');
+  assert.match(await page.locator('.step-detail').innerText(), /This step\s+\S/i, 'the expanded sheet carries the step detail');
+  assert.ok(await sheet.evaluate(element => element.scrollWidth <= element.clientWidth), 'the scenario sheet does not scroll sideways');
+  await sheet.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const [next, expanded] = await Promise.all([page.locator('#scenario-next').boundingBox(), sheet.boundingBox()]);
+  assert.ok(next.y + next.height <= expanded.y + expanded.height + 1 && next.y >= expanded.y, 'Back and Next stay docked while the notes scroll');
+  // A downward swipe on the sheet's head collapses it, as dragging its handle would.
+  const head = await page.locator('.sheet-head').boundingBox();
+  await page.mouse.move(head.x + head.width / 3, head.y + head.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(head.x + head.width / 3, head.y + head.height / 2 + 80, { steps: 4 });
+  await page.mouse.up();
+  assert.equal(await page.locator('.chart').isVisible(), false, 'swiping the head down collapses the sheet');
+
   for (let index = 0; index < 6; index++) await page.locator('#scenario-next').click();
   await assertLabelsSeparate(page);
+  await page.goto(`${url}#explore`);
+  await heading(page, 'Change the model yourself');
+  assert.equal(await page.locator('[data-lab="fork"]').isVisible(), true, 'free exploration docks its actions under the scene');
+  assert.equal(await page.locator('#reset-model').isVisible(), false);
   await page.close();
-  console.log('Phone layout kept the canvas sized to the scene, labels apart, and the scenario panel above the scene without sideways scrolling.');
+  console.log('Phone layout kept the canvas sized to the scene, opened scenarios on the scene with the step docked beneath, and expanded and collapsed the sheet.');
 }
 
 try {
