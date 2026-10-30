@@ -48,7 +48,7 @@ const drawer = (id: PanelId, meta: string, body: string, className = '', metaId 
 
 root.innerHTML = `
   <div class="menu-dock">
-    <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Forkscape menu" aria-expanded="false" aria-controls="panel-menu"><span class="brand-mark" aria-hidden="true">☰</span><span class="brand">FORKSCAPE</span></button>
+    <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Forkscape menu" aria-expanded="false" aria-controls="panel-menu"><img class="brand-mark" src="/favicon.svg" alt="" width="32" height="32" /><span class="brand">FORKSCAPE</span><svg class="menu-caret" viewBox="0 0 5 3" width="10" height="6" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="M0 0h5v1H4v1H3v1H2V2H1V1H0z"/></svg></button>
     <nav id="panel-menu" class="panel-menu" aria-label="Panels" hidden><div class="menu-heading"><span>A process memory lab</span><span class="badge">Model</span></div>${(Object.keys(panelLabels) as PanelId[]).map(id => `<button type="button" data-panel="${id}" aria-pressed="false">${escapeHtml(panelLabels[id])}</button>`).join('')}</nav>
   </div>
   <button id="view-toggle" class="view-toggle" type="button"></button>
@@ -73,7 +73,6 @@ function renderChrome() {
   if (openPanel === 'timeline' && !hasTimeline()) openPanel = null;
   const toggle = root.querySelector<HTMLButtonElement>('#menu-toggle')!;
   toggle.setAttribute('aria-expanded', String(menuOpen));
-  toggle.querySelector('.brand-mark')!.textContent = menuOpen ? '✕' : '☰';
   root.querySelector<HTMLElement>('#panel-menu')!.hidden = !menuOpen;
   root.querySelector<HTMLElement>('[data-panel="timeline"]')!.hidden = !hasTimeline();
   root.querySelectorAll<HTMLElement>('[data-panel]').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.panel === openPanel)));

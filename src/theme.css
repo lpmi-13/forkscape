@@ -15,7 +15,10 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 .menu-toggle,.view-toggle{background:linear-gradient(100deg,#251d43 0%,#171f42 48%,#13384a 100%);border:2px solid #a359a8;border-radius:5px;box-shadow:3px 3px 0 #58395c}
 .view-toggle{color:#fff4d7}
 .brand{font-family:'Silkscreen','Space Grotesk',sans-serif;font-size:var(--text-md);letter-spacing:.045em;color:#fff4d7;text-shadow:2px 2px 0 #7d4d83}
-.brand-mark{background:#f57994;color:#fff5af;border:2px solid #ffdc82;box-shadow:2px 2px 0 #654887;font-size:16px;text-shadow:none;transform:rotate(-3deg)}
+/* The favicon itself, at exactly 2x so its pixels stay sharp. With the logo in the tile, the caret says the button opens a menu, and flips while it is open. */
+.brand-mark{transform:rotate(-3deg)}
+.menu-caret{color:#fff4d7;filter:drop-shadow(2px 2px 0 #7d4d83);transition:transform .14s ease}
+.menu-toggle[aria-expanded="true"] .menu-caret{transform:rotate(180deg)}
 .panel-menu{background:#1f2246;border:2px solid #8a6caa;border-radius:5px;box-shadow:4px 4px 0 #151731}
 .menu-heading{color:#9cdad0;font-family:'Fredoka',sans-serif;font-weight:500;letter-spacing:0}
 .panel-menu [data-panel]{color:#d0c7e0;font-weight:500}
@@ -86,7 +89,7 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 @media(max-width:760px){.scene-label{padding:1px 3px;letter-spacing:0}.frame-label{padding:1px 2px}}
 /* The smallest phones: the corner controls keep apart, and the step counter takes its own line above Back and Next. */
 @media(max-width:400px){.menu-toggle{gap:8px;padding-right:12px}.view-toggle{padding:0 10px;font-size:var(--text-sm)}#scenario-content{padding:0 16px 24px}.stepper-controls{flex-wrap:wrap}.step-count{order:-1;flex-basis:100%;text-align:center}}
-@media(prefers-reduced-motion:reduce){button{transition:none}button:hover:not(:disabled){transform:none}}
+@media(prefers-reduced-motion:reduce){button,.menu-caret{transition:none}button:hover:not(:disabled){transform:none}}
 
 .lesson-stage{margin-top:18px;padding-top:13px;border-top:1px dashed #806b94}
 .lesson-stage p,.model-tools{color:#e5dfe8;font-size:var(--text-sm);line-height:1.5}
