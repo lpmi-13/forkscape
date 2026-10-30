@@ -46,6 +46,7 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 /* Scene labels use Fredoka: legible at 12-14px in the footprint Silkscreen needed at 8-9px, so no more labels give way. */
 .scene-label{z-index:2;background:#2c234bbb;color:#fff2ca;border:1px solid #e6b878;padding:1px 6px;border-radius:3px;font-family:'Fredoka',sans-serif;letter-spacing:0;text-shadow:1px 1px 0 #251b37;box-shadow:2px 2px 0 #2c234966}
 .scene-label-small{background:#22344cba;border-color:#5bcfc6;color:#aaf5df}
+.label-absent{border-style:dashed}
 .frame-label{background:#312347d9;border-color:#db8bc3;color:#ffe5a9}
 .label-selected{background:#6b3f65;border-color:#fff0a4;color:#fff8d8}
 .legend{color:#eadac8;font-family:'Fredoka',sans-serif}
@@ -204,6 +205,8 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 .acct-seg.exclusive{fill:#74dfad}
 .acct-seg.shared{fill:#b39cf3}
 .acct-seg.selected{stroke:#ffe794;stroke-width:1.5}
+/* A step moves a drawn mark from its own top-left corner, so a bar grows from its left end. */
+svg [data-motion]{transform-box:fill-box;transform-origin:0 0}
 .acct-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}
 .acct-totals div{padding:6px 8px;border:1px solid #4a4670;border-radius:4px;background:#232750}
 .acct-totals span{display:block;color:#b9c5d3;font:500 var(--text-sm) 'Fredoka',sans-serif}

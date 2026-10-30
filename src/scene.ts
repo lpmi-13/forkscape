@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { WorldState } from './model';
-import { memoryRows, sharers } from './model';
+import type { ProcessState, WorldState } from './model';
+import { mappedPages, memoryRows, sharers } from './model';
+import { linkedKey, stepEase, stepLinks, stepMotion } from './motion';
 
 /** Where a deck's nth mapped page tile sits, relative to the deck centre. Up to four rows of six. */
 export function deckTileOffset(visualIndex: number, count: number) {
@@ -71,7 +72,90 @@ export function stageView(width: number, height: number, coveredTop = 0) {
   return { fov, distance: far, target, position: target.clone().addScaledVector(overview, far) };
 }
 export type StructurePart = 'cable' | 'page_table' | 'thread' | 'stack';
+type LabelText = { text: string; detail: string };
+// A deck draws at most four thread spindles.
+const spindleSlots = 4;
+/** Locks a process holds through a thread it does not have, by owner: fork copies a lock's state but only the calling thread. */
+function absentOwners(process: ProcessState) {
+  const owners = new Map<number, string[]>();
+  process.locks.forEach(lock => { if (lock.ownerTid !== null && !process.threadIds.includes(lock.ownerTid)) owners.set(lock.ownerTid, [...owners.get(lock.ownerTid) ?? [], lock.id]); });
+  return owners;
+}
+/** What each scene label says, by the key of the object it names, so a step can tell which labels it changed. A detail is hidden on phones. */
+export function labelTexts(world: WorldState, accounting: boolean) {
+  const texts = new Map<string, LabelText>([['s/frames-label', { text: 'PHYSICAL FRAMES', detail: '' }], ['s/kernel-label', { text: 'KERNEL · PAGE TABLES', detail: '' }]]);
+  const rows = memoryRows(world);
+  world.kernelObjects.forEach(object => texts.set(`o/${object.id}/label`, { text: `${object.kind.toUpperCase()} · ${object.id}`, detail: object.kind === 'file' ? `offset ${object.offset}` : '' }));
+  world.frames.forEach(frame => texts.set(`f/${frame.id}/label`, { text: `F${frame.id}`, detail: String(sharers(world, frame.id)) }));
+  world.processes.forEach(process => {
+    const row = accounting && process.status === 'running' ? rows.find(item => item.pid === process.pid) : undefined;
+    texts.set(`p/${process.pid}/label`, { text: `${process.role.toUpperCase()} · PID ${process.pid}${process.status === 'zombie' ? ' · ZOMBIE' : ''}`, detail: row ? `RSS ${row.rss / 1024} · PSS ${+(row.pss / 1024).toFixed(1)} KiB` : '' });
+    if (process.status === 'zombie') return;
+    process.descriptors.forEach((descriptor, index) => texts.set(`p/${process.pid}/cable/${index}/label`, { text: `fd ${descriptor.fd}`, detail: '' }));
+    const holds = (locks: string[]) => locks.length ? `holds ${locks.join(', ')}` : '';
+    process.threadIds.slice(0, spindleSlots).forEach((tid, index) => texts.set(`p/${process.pid}/thread/${index}/label`, { text: `thread ${tid}`, detail: holds(process.locks.filter(lock => lock.ownerTid === tid).map(lock => lock.id)) }));
+    absentOwners(process).forEach((locks, tid) => texts.set(`p/${process.pid}/absent/${tid}/label`, { text: `thread ${tid} absent`, detail: holds(locks) }));
+    if (world.processes.length > 1) texts.set(`p/${process.pid}/stack/label`, { text: process.role === 'master' ? `fork() → ${world.processes.filter(p => p.parentPid === process.pid).map(p => p.pid).join(', ')}` : 'fork() → 0', detail: '' });
+    if (mappedPages(process) > 24) texts.set(`p/${process.pid}/overflow-label`, { text: `+${mappedPages(process) - 24} pages · see flat view`, detail: '' });
+    texts.set(`p/${process.pid}/filament-label`, { text: 'page → frame', detail: '' });
+  });
+  return texts;
+}
 type LabelBox = { left: number; top: number; right: number; bottom: number };
+
+// A step eases each drawn object between two poses. Objects are keyed like `p/<pid>/deck`, so an object's pose carries across a step.
+type Drawn = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial | THREE.MeshBasicMaterial> | THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+type Pose = { position: THREE.Vector3; size: THREE.Vector3; opacity: number; color: THREE.Color; emissive?: THREE.Color; glow?: number; points?: number[] };
+// A filament's geometry holds its two endpoints, so it moves them rather than its scale.
+const isFilament = (object: THREE.Object3D) => object instanceof THREE.Line && !(object instanceof THREE.LineSegments);
+const geometrySize = (object: Drawn) => {
+  if (!object.geometry.boundingBox) object.geometry.computeBoundingBox();
+  return object.geometry.boundingBox!.getSize(new THREE.Vector3());
+};
+function poseOf(object: THREE.Object3D): Pose {
+  const drawn = object as Drawn, material = drawn.material;
+  return {
+    position: drawn.position.clone(), size: geometrySize(drawn).multiply(drawn.scale), opacity: material.opacity, color: material.color.clone(),
+    emissive: 'emissive' in material ? material.emissive.clone() : undefined, glow: 'emissiveIntensity' in material ? material.emissiveIntensity : undefined,
+    points: isFilament(drawn) ? [...drawn.geometry.getAttribute('position').array] : undefined,
+  };
+}
+// A new object grows from nothing in place, and a removed one shrinks away. A filament reaches down from its page or draws back into it.
+const vanished = (pose: Pose): Pose => ({ ...pose, size: pose.size.clone().multiplyScalar(1e-3), opacity: pose.points ? 0 : pose.opacity, points: pose.points && [...pose.points.slice(0, 3), ...pose.points.slice(0, 3)] });
+const moved = (pose: Pose, offset: THREE.Vector3): Pose => ({ ...pose, position: pose.position.clone().add(offset), points: pose.points?.map((value, index) => value + offset.getComponent(index % 3)) });
+function tween(object: THREE.Object3D, from: Pose, to: Pose, restores: (() => void)[]) {
+  const drawn = object as Drawn, material = drawn.material, base = geometrySize(drawn), size = new THREE.Vector3();
+  // An opaque material is translucent only while it fades, so it writes depth again afterwards.
+  if (from.opacity !== to.opacity && !material.transparent) {
+    material.transparent = true;
+    material.needsUpdate = true;
+    restores.push(() => { material.transparent = false; material.needsUpdate = true; });
+  }
+  const endpoints = from.points && to.points && isFilament(drawn) ? drawn.geometry.getAttribute('position') : undefined;
+  return (eased: number) => {
+    drawn.position.lerpVectors(from.position, to.position, eased);
+    if (!endpoints) {
+      size.lerpVectors(from.size, to.size, eased);
+      drawn.scale.set(base.x ? size.x / base.x : 1, base.y ? size.y / base.y : 1, base.z ? size.z / base.z : 1);
+    }
+    material.color.lerpColors(from.color, to.color, eased);
+    material.opacity = THREE.MathUtils.lerp(from.opacity, to.opacity, eased);
+    if ('emissive' in material && from.emissive && to.emissive) {
+      material.emissive.lerpColors(from.emissive, to.emissive, eased);
+      material.emissiveIntensity = THREE.MathUtils.lerp(from.glow!, to.glow!, eased);
+    }
+    if (endpoints) {
+      from.points!.forEach((value, index) => { endpoints.array[index] = THREE.MathUtils.lerp(value, to.points![index], eased); });
+      endpoints.needsUpdate = true;
+      drawn.geometry.boundingSphere = null;
+    }
+  };
+}
+function disposeObject(object: THREE.Object3D) {
+  const drawn = object as Drawn;
+  drawn.geometry?.dispose();
+  drawn.material?.dispose();
+}
 export type SceneSelection = { kind: 'process'; pid: number } | { kind: 'page'; pid: number; page: number } | { kind: 'frame'; frameId: number } | { kind: 'object'; objectId: string } | { kind: 'structure'; pid: number; part: StructurePart; index: number };
 
 export class ForkScene {
@@ -80,6 +164,10 @@ export class ForkScene {
   private camera = new THREE.PerspectiveCamera(baseFov, 1, 0.1, 100);
   private controls: OrbitControls;
   private dynamic = new THREE.Group();
+  // Objects a step removed, drawn until its transition ends.
+  private leaving = new THREE.Group();
+  private transitionFrame = 0;
+  private settle: (() => void) | null = null;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private pickables: THREE.Object3D[] = [];
@@ -87,7 +175,7 @@ export class ForkScene {
   private pendingFrame = 0;
   private motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
   private labels: HTMLDivElement[] = [];
-  private targets: { element: HTMLDivElement; point: THREE.Vector3; priority: number }[] = [];
+  private targets: { key: string; element: HTMLDivElement; point: THREE.Vector3; priority: number }[] = [];
   private currentWorld?: WorldState;
   private selectedPid = 4100;
   private onSelect?: (selection: SceneSelection) => void;
@@ -99,6 +187,10 @@ export class ForkScene {
   private framed = { position: new THREE.Vector3(), target: new THREE.Vector3() };
   /** Adds each process's RSS and PSS to its label; read on the next setWorld. */
   showAccounting = false;
+  /** Labels only what changed since this state, and what is selected; null labels everything. Read on the next setWorld. */
+  changedSince: WorldState | null = null;
+  private texts = new Map<string, LabelText>();
+  private quietLabels = new Set<string>();
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -122,7 +214,7 @@ export class ForkScene {
     const neon = new THREE.PointLight(0x6deed4, 28, 16);
     neon.position.set(-5, 4, 2);
     this.scene.add(neon);
-    this.scene.add(this.dynamic);
+    this.scene.add(this.dynamic, this.leaving);
     this.raycaster.params.Line.threshold = .12;
     this.renderer.domElement.addEventListener('pointerdown', this.pointerDown);
     this.renderer.domElement.addEventListener('pointermove', this.hover);
@@ -133,7 +225,15 @@ export class ForkScene {
     this.fitView();
   }
 
-  setWorld(world: WorldState, selectedPid: number, selectedPage: { pid: number; page: number } | null, selectedFrame: number | null, selectedObjectId: string | null, selectedStructure: { pid: number; part: StructurePart; index: number } | null, onSelect: (selection: SceneSelection) => void) {
+  /** Draws a world state. With `animate`, each object eases from where it is drawn now, so a step taken during another step's transition carries on from there. */
+  setWorld(world: WorldState, selectedPid: number, selectedPage: { pid: number; page: number } | null, selectedFrame: number | null, selectedObjectId: string | null, selectedStructure: { pid: number; part: StructurePart; index: number } | null, onSelect: (selection: SceneSelection) => void, animate = false) {
+    const before = this.currentWorld;
+    const drawn = animate && before && !this.motionPreference.matches ? this.drawnPoses() : null;
+    this.settle?.();
+    const previous = [...this.dynamic.children];
+    this.dynamic.clear();
+    this.pickables = [];
+    this.clearLabels();
     this.currentWorld = world;
     this.selectedPid = selectedPid;
     this.selectedPage = selectedPage;
@@ -141,9 +241,68 @@ export class ForkScene {
     this.selectedObjectId = selectedObjectId;
     this.selectedStructure = selectedStructure;
     this.onSelect = onSelect;
-    this.clear();
     this.build();
+    if (drawn) this.transition(drawn, previous, stepLinks(before!, world));
+    else previous.forEach(disposeObject);
     this.renderFrame();
+  }
+
+  private drawnPoses() {
+    const objects = new Map<string, Pose>();
+    // An object still leaving from an interrupted step can come back; one still in the scene takes precedence.
+    [...this.leaving.children, ...this.dynamic.children].forEach(object => objects.set(object.userData.key, poseOf(object)));
+    return { objects, labels: new Map(this.targets.map(target => [target.key, target.point.clone()])) };
+  }
+
+  // A forked process's parts come out of its parent's, and a copy grows out of the frame it copies; stepping back returns them there.
+  // A part with no counterpart grows or shrinks on its process's deck or its frame's tile, travelling with it. A label follows its object, and a new one fades in.
+  private transition(drawn: ReturnType<ForkScene['drawnPoses']>, previous: THREE.Object3D[], links: ReturnType<typeof stepLinks>) {
+    const built = new Map(this.dynamic.children.map(object => [object.userData.key as string, object]));
+    const finals = new Map([...built].map(([key, object]) => [key, poseOf(object)]));
+    const enters = (key: string) => drawn.objects.get(key) ?? drawn.objects.get(linkedKey(key, links.enter) ?? '');
+    const exits = (key: string) => finals.get(key) ?? finals.get(linkedKey(key, links.exit) ?? '');
+    const anchor = (key: string) => { const match = /^([pf])\/(\d+)\//.exec(key); return match ? `${match[1]}/${match[2]}/${match[1] === 'p' ? 'deck' : 'tile'}` : ''; };
+    const travel = (from?: Pose, to?: Pose) => from && to ? to.position.clone().sub(from.position) : new THREE.Vector3();
+    const restores: (() => void)[] = [];
+    const steps: ((eased: number) => void)[] = [...built].map(([key, object]) => {
+      const to = finals.get(key)!, home = anchor(key);
+      return tween(object, enters(key) ?? moved(vanished(to), travel(finals.get(home), enters(home))), to, restores);
+    });
+    for (const object of previous) {
+      const key = object.userData.key as string;
+      if (built.has(key)) { disposeObject(object); continue; }
+      // The interrupted transition was settled to its end, so a leaving object starts from the pose it was drawn in.
+      const from = drawn.objects.get(key) ?? poseOf(object), home = anchor(key);
+      this.leaving.add(object);
+      steps.push(tween(object, from, exits(key) ?? moved(vanished(from), travel(drawn.objects.get(home), exits(home))), restores));
+    }
+    for (const { key, element, point } of this.targets) {
+      const home = anchor(key), from = drawn.labels.get(key) ?? drawn.labels.get(linkedKey(key, links.enter) ?? ''), to = point.clone();
+      const origin = from ?? to.clone().add(travel(finals.get(home), enters(home)));
+      steps.push(eased => {
+        point.lerpVectors(origin, to, eased);
+        if (!from) element.style.opacity = eased < 1 ? String(eased) : '';
+      });
+    }
+    const start = performance.now();
+    const frame = (now: number) => {
+      const progress = Math.min((now - start) / stepMotion.duration, 1);
+      if (progress === 1) { this.settle?.(); this.renderFrame(); return; }
+      steps.forEach(step => step(stepEase(progress)));
+      this.renderFrame();
+      this.transitionFrame = requestAnimationFrame(frame);
+    };
+    this.settle = () => {
+      cancelAnimationFrame(this.transitionFrame);
+      this.transitionFrame = 0;
+      this.settle = null;
+      steps.forEach(step => step(1));
+      restores.forEach(restore => restore());
+      [...this.leaving.children].forEach(disposeObject);
+      this.leaving.clear();
+    };
+    steps.forEach(step => step(0));
+    this.transitionFrame = requestAnimationFrame(frame);
   }
 
   /** Frames the whole stage in the scene's current size. */
@@ -191,65 +350,80 @@ export class ForkScene {
     this.controls.update();
   };
 
-  // Translucent boxes don't write depth: three.js sorts them by centre, so a large pane like the kernel layer would otherwise hide whatever is drawn after it.
-  private makeBox(width: number, height: number, depth: number, color: number, opacity = 1) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: opacity > .8 ? .1 : .025, transparent: opacity < 1, depthWrite: opacity >= 1, opacity, roughness: .65, metalness: .08 }));
-    this.dynamic.add(mesh);
-    return mesh;
+  private add<T extends THREE.Object3D>(key: string, object: T) {
+    object.userData.key = key;
+    this.dynamic.add(object);
+    return object;
   }
 
-  private addLine(a: THREE.Vector3, b: THREE.Vector3, color: number, opacity = .48) {
+  // Translucent boxes don't write depth: three.js sorts them by centre, so a large pane like the kernel layer would otherwise hide whatever is drawn after it.
+  private makeBox(key: string, width: number, height: number, depth: number, color: number, opacity = 1) {
+    return this.add(key, new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: opacity > .8 ? .1 : .025, transparent: opacity < 1, depthWrite: opacity >= 1, opacity, roughness: .65, metalness: .08 })));
+  }
+
+  private addLine(key: string, a: THREE.Vector3, b: THREE.Vector3, color: number, opacity = .48) {
     const geometry = new THREE.BufferGeometry().setFromPoints([a, b]);
-    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
-    this.dynamic.add(line);
-    return line;
+    return this.add(key, new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity })));
   }
 
   // A descriptor is a thick, sagging cable from a port on the deck, so it never reads as one of the straight page-to-frame filaments.
-  private addCable(from: THREE.Vector3, to: THREE.Vector3, color: number, highlighted: boolean) {
+  private addCable(key: string, from: THREE.Vector3, to: THREE.Vector3, color: number, highlighted: boolean) {
     const curve = new THREE.QuadraticBezierCurve3(from, from.clone().lerp(to, .5).setY((from.y + to.y) / 2 - .3 - from.distanceTo(to) * .1), to);
     const material = () => new THREE.MeshStandardMaterial({ color: highlighted ? 0xffffff : color, emissive: color, emissiveIntensity: highlighted ? .7 : .35, roughness: .45 });
-    const cable = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, highlighted ? .05 : .035, 6), material());
-    const port = new THREE.Mesh(new THREE.BoxGeometry(.17, .13, .1), material());
+    // The tube is centred on its position, so a step can move and scale it like any other object.
+    const tube = new THREE.TubeGeometry(curve, 20, highlighted ? .05 : .035, 6);
+    tube.computeBoundingBox();
+    const centre = tube.boundingBox!.getCenter(new THREE.Vector3());
+    tube.translate(-centre.x, -centre.y, -centre.z);
+    const cable = this.add(key, new THREE.Mesh(tube, material()));
+    cable.position.copy(centre);
+    const port = this.add(`${key}/port`, new THREE.Mesh(new THREE.BoxGeometry(.17, .13, .1), material()));
     port.position.copy(from);
-    this.dynamic.add(cable, port);
     // Cables converge on their object, so each is labelled near its own port.
     return { parts: [cable, port], labelPoint: curve.getPoint(.3) };
   }
 
   // When labels overlap on screen, the higher-priority one stays visible.
-  private label(text: string, point: THREE.Vector3, priority: number, className = '', detail = '') {
+  private label(key: string, point: THREE.Vector3, priority: number, className = '') {
+    const label = this.texts.get(key);
+    if (!label || this.quietLabels.has(key)) return;
     const element = document.createElement('div');
     element.className = `scene-label ${className}`;
-    element.textContent = text;
-    if (detail) {
+    element.textContent = label.text;
+    if (label.detail) {
       const extra = document.createElement('span');
       extra.className = 'label-detail';
-      extra.textContent = ` · ${detail}`;
+      extra.textContent = ` · ${label.detail}`;
       element.append(extra);
     }
     this.host.appendChild(element);
     this.labels.push(element);
     const index = this.targets.findIndex(target => target.priority < priority);
-    this.targets.splice(index < 0 ? this.targets.length : index, 0, { element, point, priority });
+    this.targets.splice(index < 0 ? this.targets.length : index, 0, { key, element, point, priority });
   }
 
   private build() {
     const world = this.currentWorld;
     if (!world) return;
-    const base = this.makeBox(11.3, .25, 7.8, 0x563757);
+    const base = this.makeBox('s/base', 11.3, .25, 7.8, 0x563757);
     base.position.y = -.23;
-    const ground = this.makeBox(11, .08, 7.5, 0x222b50);
+    const ground = this.makeBox('s/ground', 11, .08, 7.5, 0x222b50);
     ground.position.y = -.12;
-    const membrane = this.makeBox(10.6, .035, 7.1, 0xb77bee, .22);
+    const membrane = this.makeBox('s/membrane', 10.6, .035, 7.1, 0xb77bee, .22);
     membrane.position.y = kernelY;
     const grid = new THREE.GridHelper(10, 20, 0x54cfbd, 0x466786);
     grid.position.y = -.07;
-    this.dynamic.add(grid);
-    this.label('PHYSICAL FRAMES', new THREE.Vector3(-4.7, .02, 3.25), 1, 'scene-label-small');
-    this.label('KERNEL · PAGE TABLES', new THREE.Vector3(-4.65, kernelY + .03, 3.15), 1, 'scene-label-small');
+    this.add('s/grid', grid);
     // A selected page traces to its frame; a selected frame traces to every page mapped to it.
     const tracedFrame = this.selectedFrame ?? (this.selectedPage && world.processes.find(p => p.pid === this.selectedPage!.pid)?.pages[this.selectedPage.page]) ?? null;
+    // A scenario step labels only what it changed, and what is selected, so its changes stand out.
+    this.texts = labelTexts(world, this.showAccounting);
+    const before = this.changedSince && labelTexts(this.changedSince, this.showAccounting);
+    const part = this.selectedStructure;
+    const selected = new Set([`p/${this.selectedPid}/label`, `p/${this.selectedPid}/filament-label`, `f/${tracedFrame}/label`, `o/${this.selectedObjectId}/label`, part && (part.part === 'cable' || part.part === 'thread') ? `p/${part.pid}/${part.part}/${part.index}/label` : '']);
+    this.quietLabels = new Set(before ? [...this.texts].filter(([key, { text, detail }]) => !selected.has(key) && before.get(key)?.text === text && before.get(key)?.detail === detail).map(([key]) => key) : []);
+    this.label('s/frames-label', new THREE.Vector3(-4.7, .02, 3.25), 1, 'scene-label-small');
+    this.label('s/kernel-label', new THREE.Vector3(-4.65, kernelY + .03, 3.15), 1, 'scene-label-small');
 
     const objectPositions = new Map<string, THREE.Vector3>();
     world.kernelObjects.forEach((object, index) => {
@@ -261,10 +435,10 @@ export class ForkScene {
       }));
       buoy.position.set(x, kernelY + .31, z);
       buoy.userData.selection = { kind: 'object', objectId: object.id } satisfies SceneSelection;
-      this.dynamic.add(buoy);
+      this.add(`o/${object.id}/buoy`, buoy);
       this.pickables.push(buoy);
       objectPositions.set(object.id, buoy.position.clone());
-      this.label(`${object.kind.toUpperCase()} · ${object.id}`, new THREE.Vector3(x, kernelY + .67, z), 3, 'scene-label-small');
+      this.label(`o/${object.id}/label`, new THREE.Vector3(x, kernelY + .67, z), 3, 'scene-label-small');
     });
 
     const framePositions = new Map<number, THREE.Vector3>();
@@ -273,29 +447,29 @@ export class ForkScene {
       const count = sharers(world, frame.id);
       const ownerIndex = world.processes.findIndex(p => p.pid === frame.owner);
       const color = count > 1 ? 0xb39cf3 : frame.owner === null ? 0x74dfad : palette[Math.max(ownerIndex, 0) % palette.length];
-      const tile = this.makeBox(1.06, .2, depth, color);
+      const tile = this.makeBox(`f/${frame.id}/tile`, 1.06, .2, depth, color);
       tile.position.set(x, .08, z);
       tile.userData.selection = { kind: 'frame', frameId: frame.id } satisfies SceneSelection;
       this.pickables.push(tile);
       const tileEdge = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineBasicMaterial({ color: count > 1 ? 0xf1b6ff : 0xd7ffb2, transparent: true, opacity: .75 }));
       tileEdge.position.copy(tile.position);
-      this.dynamic.add(tileEdge);
+      this.add(`f/${frame.id}/edge`, tileEdge);
       if (tracedFrame === frame.id) {
         const marker = new THREE.Mesh(new THREE.TorusGeometry(.59, .035, 4, 16), new THREE.MeshBasicMaterial({ color: 0xffe794 }));
         marker.rotation.x = -Math.PI / 2;
         marker.position.set(x, .23, z);
-        this.dynamic.add(marker);
+        this.add(`f/${frame.id}/trace`, marker);
       }
       if (count > 1) {
         for (let ring = 0; ring < count; ring++) {
           const marker = new THREE.Mesh(new THREE.TorusGeometry(.34 + ring * .075, .018, 4, 12), new THREE.MeshBasicMaterial({ color: ring % 2 ? 0xffd37c : 0xff89d2 }));
           marker.rotation.x = -Math.PI / 2;
           marker.position.set(x, .21 + ring * .025, z);
-          this.dynamic.add(marker);
+          this.add(`f/${frame.id}/ring/${ring}`, marker);
         }
       }
       framePositions.set(frame.id, tile.position.clone());
-      this.label(`F${frame.id}`, new THREE.Vector3(x, .37, z), 2, 'frame-label', String(count));
+      this.label(`f/${frame.id}/label`, new THREE.Vector3(x, .37, z), 2, 'frame-label');
     });
 
     world.processes.forEach((process, processIndex) => {
@@ -304,19 +478,17 @@ export class ForkScene {
       const y = process.role === 'master' ? 3.85 : 3;
       const isSelected = this.selectedPid === process.pid;
       const color = process.role === 'master' ? 0xffc66f : palette[processIndex % palette.length];
-      const deck = this.makeBox(5.4, .17, 2.1, color, process.status === 'zombie' ? .23 : .38);
+      const deck = this.makeBox(`p/${process.pid}/deck`, 5.4, .17, 2.1, color, process.status === 'zombie' ? .23 : .38);
       deck.position.set(x, y, z);
       deck.userData.selection = { kind: 'process', pid: process.pid } satisfies SceneSelection;
       this.pickables.push(deck);
       const border = new THREE.LineSegments(new THREE.EdgesGeometry(deck.geometry), new THREE.LineBasicMaterial({ color: isSelected ? 0xffecad : color, transparent: true, opacity: isSelected ? 1 : .78 }));
       border.position.copy(deck.position);
-      this.dynamic.add(border);
-      const row = this.showAccounting && process.status === 'running' ? memoryRows(world).find(item => item.pid === process.pid) : undefined;
-      this.label(`${process.role.toUpperCase()} · PID ${process.pid}${process.status === 'zombie' ? ' · ZOMBIE' : ''}`, new THREE.Vector3(x, y + .3, z), isSelected ? 6 : 5, isSelected ? 'label-selected' : '',
-        row ? `RSS ${row.rss / 1024} · PSS ${+(row.pss / 1024).toFixed(1)} KiB` : '');
+      this.add(`p/${process.pid}/border`, border);
+      this.label(`p/${process.pid}/label`, new THREE.Vector3(x, y + .3, z), isSelected ? 6 : 5, isSelected ? 'label-selected' : '');
       if (process.status === 'zombie') return;
       const pageTableSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'page_table';
-      const pageTable = this.makeBox(5.8, .025, 2.35, pageTableSelected ? 0xffd779 : 0xa686d8, pageTableSelected ? .75 : .3);
+      const pageTable = this.makeBox(`p/${process.pid}/page-table`, 5.8, .025, 2.35, pageTableSelected ? 0xffd779 : 0xa686d8, pageTableSelected ? .75 : .3);
       pageTable.position.set(x, y - .15, z);
       pageTable.userData.selection = { kind: 'structure', pid: process.pid, part: 'page_table', index: 0 } satisfies SceneSelection;
       this.pickables.push(pageTable);
@@ -325,50 +497,55 @@ export class ForkScene {
         const object = world.kernelObjects.find(item => item.id === descriptor.objectId);
         if (point && object) {
           const cableSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'cable' && this.selectedStructure.index === index;
-          const cable = this.addCable(new THREE.Vector3(x - 2.35 + index * .2, y, z - 1.1), point.clone().setY(point.y + .18), object.kind === 'socket' ? 0x65dfcb : 0xf7bc79, cableSelected || this.selectedObjectId === object.id);
+          const cable = this.addCable(`p/${process.pid}/cable/${index}`, new THREE.Vector3(x - 2.35 + index * .2, y, z - 1.1), point.clone().setY(point.y + .18), object.kind === 'socket' ? 0x65dfcb : 0xf7bc79, cableSelected || this.selectedObjectId === object.id);
           cable.parts.forEach(part => {
             part.userData.selection = { kind: 'structure', pid: process.pid, part: 'cable', index } satisfies SceneSelection;
             this.pickables.push(part);
           });
-          this.label(`fd ${descriptor.fd}`, cable.labelPoint, 3, 'scene-label-small');
+          this.label(`p/${process.pid}/cable/${index}/label`, cable.labelPoint, 3, 'scene-label-small');
         }
       });
+      const spindleX = (slot: number) => x + 2.42 - slot * .18;
       process.threadIds.forEach((tid, index) => {
-        if (index > 3) return;
+        if (index >= spindleSlots) return;
         const threadSelected = this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'thread' && this.selectedStructure.index === index;
         const spindle = new THREE.Mesh(new THREE.CylinderGeometry(threadSelected ? .08 : .045, .065, .38, 6), new THREE.MeshStandardMaterial({ color: threadSelected ? 0xffffff : 0xffe18c, emissive: 0xa46b2f, emissiveIntensity: threadSelected ? .65 : .2 }));
-        spindle.position.set(x + 2.42 - index * .18, y + .29, z + .6);
+        spindle.position.set(spindleX(index), y + .29, z + .6);
         spindle.userData.selection = { kind: 'structure', pid: process.pid, part: 'thread', index } satisfies SceneSelection;
-        this.dynamic.add(spindle);
+        this.add(`p/${process.pid}/thread/${index}`, spindle);
         this.pickables.push(spindle);
+        this.label(`p/${process.pid}/thread/${index}/label`, new THREE.Vector3(spindleX(index), y + .55, z + .6), 3, 'scene-label-small');
       });
+      // A lock whose owner did not survive fork is labelled where that thread's spindle would stand, dashed like anything else absent.
+      // It is the point of the thread scenario, so it outranks the spindle labels beside it.
+      [...absentOwners(process).keys()].forEach((tid, offset) =>
+        this.label(`p/${process.pid}/absent/${tid}/label`, new THREE.Vector3(spindleX(Math.min(process.threadIds.length, spindleSlots) + offset), y + .55, z + .6), 4, 'scene-label-small label-absent'));
       if (world.processes.length > 1) {
         for (let layer = 0; layer < 3; layer++) {
-          const stack = this.makeBox(.38, .12, .3, this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'stack' ? 0xffffff : layer === 2 ? 0xffdc89 : 0x89c7dc);
+          const stack = this.makeBox(`p/${process.pid}/stack/${layer}`, .38, .12, .3, this.selectedStructure?.pid === process.pid && this.selectedStructure.part === 'stack' ? 0xffffff : layer === 2 ? 0xffdc89 : 0x89c7dc);
           stack.position.set(x + 2.36, y + .22 + layer * .14, z - .55);
           stack.userData.selection = { kind: 'structure', pid: process.pid, part: 'stack', index: 0 } satisfies SceneSelection;
           this.pickables.push(stack);
         }
-        this.label(process.role === 'master' ? `fork() → ${world.processes.filter(p => p.parentPid === process.pid).map(p => p.pid).join(', ')}` : 'fork() → 0',
-          new THREE.Vector3(x + 2.35, y + .78, z - .55), 4, 'scene-label-small');
+        this.label(`p/${process.pid}/stack/label`, new THREE.Vector3(x + 2.35, y + .78, z - .55), 4, 'scene-label-small');
       }
       // Every mapped page gets a tile; a page with no frame behind it is a faint tile with no filament.
       const mappedPages = process.regions.flatMap(region => Array.from({ length: region.pageCount }, (_, offset) => region.startPage + offset))
         .sort((a, b) => a - b).map(pageIndex => ({ frameId: process.pages[pageIndex] ?? null, pageIndex }));
-      if (mappedPages.length > 24) this.label(`+${mappedPages.length - 24} pages · see flat view`, new THREE.Vector3(x, y + .3, z + .9), 0, 'scene-label-small');
+      if (mappedPages.length > 24) this.label(`p/${process.pid}/overflow-label`, new THREE.Vector3(x, y + .3, z + .9), 0, 'scene-label-small');
       const filamentMiddles: THREE.Vector3[] = [];
       let tracedMiddle: THREE.Vector3 | undefined;
       mappedPages.slice(0, 24).forEach(({ frameId, pageIndex }, visualIndex) => {
         const offset = deckTileOffset(visualIndex, mappedPages.length);
         const px = x + offset.x;
         const pz = z + offset.z;
-        const tile = frameId === null ? this.makeBox(.62, .06, offset.depth, 0x6c6697, .1) : this.makeBox(.62, .1, offset.depth, sharers(world, frameId) > 1 ? 0xbdadef : color);
+        const tile = frameId === null ? this.makeBox(`p/${process.pid}/page/${pageIndex}`, .62, .06, offset.depth, 0x6c6697, .1) : this.makeBox(`p/${process.pid}/page/${pageIndex}`, .62, .1, offset.depth, sharers(world, frameId) > 1 ? 0xbdadef : color);
         tile.position.set(px, y + .15, pz);
         if (frameId === null) {
           const outline = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineDashedMaterial({ color: 0xe2dcff, dashSize: .07, gapSize: .05, transparent: true, opacity: .85 }));
           outline.computeLineDistances();
           outline.position.copy(tile.position);
-          this.dynamic.add(outline);
+          this.add(`p/${process.pid}/page/${pageIndex}/outline`, outline);
         }
         tile.userData.selection = { kind: 'page', pid: process.pid, page: pageIndex } satisfies SceneSelection;
         this.pickables.push(tile);
@@ -377,12 +554,12 @@ export class ForkScene {
         if (pageSelected || traced) {
           const edge = new THREE.LineSegments(new THREE.EdgesGeometry(tile.geometry), new THREE.LineBasicMaterial({ color: 0xffe794 }));
           edge.position.copy(tile.position);
-          this.dynamic.add(edge);
+          this.add(`p/${process.pid}/page/${pageIndex}/edge`, edge);
         }
         const floor = frameId === null ? undefined : framePositions.get(frameId);
         if (floor) {
           const start = new THREE.Vector3(px, y, pz), end = new THREE.Vector3(floor.x, .18, floor.z);
-          const filament = this.addLine(start, end, traced ? 0xffffff : color, traced ? 1 : isSelected ? .6 : .22);
+          const filament = this.addLine(`p/${process.pid}/page/${pageIndex}/filament`, start, end, traced ? 0xffffff : color, traced ? 1 : isSelected ? .6 : .22);
           filament.userData.selection = { kind: 'page', pid: process.pid, page: pageIndex } satisfies SceneSelection;
           this.pickables.push(filament);
           const middle = start.clone().lerp(end, .5);
@@ -391,7 +568,7 @@ export class ForkScene {
         }
       });
       // Name the selected process's filaments where they hang, on the traced one when a page is selected.
-      if (isSelected && filamentMiddles.length) this.label('page → frame', tracedMiddle ?? filamentMiddles[Math.floor(filamentMiddles.length / 2)], 3.5, 'scene-label-small');
+      if (isSelected && filamentMiddles.length) this.label(`p/${process.pid}/filament-label`, tracedMiddle ?? filamentMiddles[Math.floor(filamentMiddles.length / 2)], 3.5, 'scene-label-small');
     });
   }
 
@@ -447,27 +624,22 @@ export class ForkScene {
     }
   };
 
-  private clear() {
-    this.pickables = [];
+  private clearLabels() {
     this.labels.forEach(label => label.remove());
     this.labels = [];
     this.targets = [];
-    for (const child of [...this.dynamic.children]) {
-      this.dynamic.remove(child);
-      const object = child as THREE.Mesh | THREE.Line;
-      object.geometry?.dispose();
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      materials.forEach(material => material?.dispose());
-    }
   }
 
   dispose() {
     cancelAnimationFrame(this.pendingFrame);
+    this.settle?.();
     this.resizeObserver.disconnect();
     document.fonts.removeEventListener('loadingdone', this.renderFrame);
     this.motionPreference.removeEventListener('change', this.updateMotion);
     this.controls.removeEventListener('change', this.renderFrame);
-    this.clear();
+    this.clearLabels();
+    [...this.dynamic.children].forEach(disposeObject);
+    this.dynamic.clear();
     this.controls.dispose();
     this.renderer.domElement.removeEventListener('pointerdown', this.pointerDown);
     this.renderer.domElement.removeEventListener('pointermove', this.hover);

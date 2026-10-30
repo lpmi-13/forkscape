@@ -4,6 +4,7 @@ import './reference.css';
 import { escapeHtml, kb, regionPages, selectionDetail, type Detail } from './detail';
 import { applyAction, assertInvariants, chargedBytes, initialWorld, mappedPages, memoryRows, objectRefCount, pageTableBytes, physicalBytes, pssBreakdown, regionForPage, residentPages, sharers, type Action, type ProcessState, type RegionState, type WorldState } from './model';
 import { scenarioById, scenarios, scenarioStates, seriesValue, stepFocus, type ChartSeries, type Scenario } from './scenarios';
+import { captureMarks, stepLinks } from './motion';
 import type { ForkScene, SceneSelection, StructurePart } from './scene';
 
 type Mode = { kind: 'library' } | { kind: 'scenario'; scenario: Scenario } | { kind: 'sandbox' };
@@ -17,6 +18,8 @@ let step = 0;
 let sandboxHistory: WorldState[] = [initialWorld()];
 let sandboxStep = 0;
 let sandboxOrigin: { scenario: Scenario; step: number } | null = null;
+// The state last drawn, so a step can link what it adds to what was there.
+let shownWorld: WorldState | null = null;
 const scenarioHistories = new Map<string, WorldState[]>();
 let selectedPid = 4100;
 let selectedFrame: number | null = null;
@@ -46,6 +49,8 @@ const metricClass = (series: ChartSeries) => series.metric === 'rss' || series.m
 const sumOf = (state: WorldState, key: 'rss' | 'pss') => memoryRows(state).reduce((sum, row) => sum + row[key], 0);
 // The RSS/PSS comparison is shown when a scenario depends on it, or when the reader opens it.
 const accountingVisible = () => mode.kind === 'scenario' ? !!mode.scenario.accounting || mode.scenario.group === 'memory' && accountingOpen : mode.kind === 'sandbox' && accountingOpen;
+// A scenario step's 3D labels name only what it changed from the step before, so the first step names everything.
+const labelBaseline = () => mode.kind === 'scenario' && step > 0 ? history[step - 1] : null;
 
 const caret = '<svg viewBox="0 0 5 3" width="10" height="6" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="M0 0h5v1H4v1H3v1H2V2H1V1H0z"/></svg>';
 // The sheet's head names what the panel shows. On narrow screens it carries the sheet's expand and close buttons.
@@ -109,6 +114,7 @@ async function ensureScene() {
     if (flat) return;
     scene = new ForkScene(host);
     scene.showAccounting = accountingVisible();
+    scene.changedSince = labelBaseline();
     scene.setWorld(world(), selectedPid, selectedPage, selectedFrame, selectedObjectId, selectedStructure, selection => { selectVisual(selection); });
   } catch { flat = true; render(); }
   finally { sceneLoading = false; }
@@ -131,7 +137,7 @@ function goToStep(index: number) {
   selectionCardOpen = false;
   if (mode.kind === 'scenario') focusScenarioStep(mode.scenario);
   else if (mode.kind === 'sandbox') sandboxStep = step;
-  render();
+  render(true);
 }
 
 function applyHash(userNavigation: boolean) {
@@ -186,9 +192,9 @@ function renderChart(scenario: Scenario, states: WorldState[]) {
       ${ticks.map(tick => `<line class="chart-grid" x1="${left}" x2="${width - right}" y1="${y(tick)}" y2="${y(tick)}"/><text class="chart-tick" x="${left - 6}" y="${y(tick) + 4}" text-anchor="end">${tick}${tick === yMax ? ' KiB' : ''}</text>`).join('')}
       ${states.map((_, index) => `<text class="chart-tick" x="${x(index)}" y="${height - 6}" text-anchor="middle">${index + 1}</text>`).join('')}
       ${limit === null ? '' : `<line class="chart-limit" x1="${left}" x2="${width - right}" y1="${y(limit / 1024)}" y2="${y(limit / 1024)}"/><text class="chart-tick chart-limit-label" x="${width - right}" y="${y(limit / 1024) - 5}" text-anchor="end">limit ${kb(limit)}</text>`}
-      <line class="chart-cursor" x1="${x(step)}" x2="${x(step)}" y1="${top}" y2="${height - bottom}"/>
+      <line class="chart-cursor" data-motion="chart/cursor" x1="${x(step)}" x2="${x(step)}" y1="${top}" y2="${height - bottom}"/>
       ${values.map((series, index) => `<path class="chart-line ${metricClass(chart.series[index])}" d="${path(series)}"/>`).join('')}
-      ${values.map((series, index) => series[step] === null ? '' : `<circle class="chart-dot ${metricClass(chart.series[index])}" cx="${x(step)}" cy="${y(series[step]!)}" r="4"/>`).join('')}
+      ${values.map((series, index) => series[step] === null ? '' : `<circle class="chart-dot ${metricClass(chart.series[index])}" data-motion="chart/dot/${index}" cx="${x(step)}" cy="${y(series[step]!)}" r="4"/>`).join('')}
       <line class="chart-hover" x1="0" x2="0" y1="${top}" y2="${height - bottom}" hidden/>
       ${states.map((_, index) => `<rect class="chart-hit" data-chart-step="${index}" x="${x(index) - band / 2}" y="0" width="${band}" height="${height}"/>`).join('')}
     </svg><div class="chart-tip" hidden></div></div>
@@ -242,7 +248,7 @@ function renderAccounting(state: WorldState) {
       const segments = pages.map(({ page, id, count }) => {
         const bytes = metric === 'RSS' ? state.pageSize : state.pageSize / count, w = bytes * scale;
         const selected = selectedPage?.pid === process.pid && selectedPage.page === page ? ' selected' : '';
-        const rect = `<rect class="acct-seg ${count > 1 ? 'shared' : 'exclusive'}${selected}" data-page="${page}" data-page-pid="${process.pid}" x="${x.toFixed(2)}" y="${y}" width="${Math.max(w - (w > 3 ? 1 : 0), .6).toFixed(2)}" height="${bar}"><title>PID ${process.pid} page ${page} · frame F${id} · ${count > 1 ? `shared by ${count}` : 'exclusive'} · ${metric} counts ${kb(bytes)}</title></rect>`;
+        const rect = `<rect class="acct-seg ${count > 1 ? 'shared' : 'exclusive'}${selected}" data-motion="p/${process.pid}/acct/${metric}/${page}" data-page="${page}" data-page-pid="${process.pid}" x="${x.toFixed(2)}" y="${y}" width="${Math.max(w - (w > 3 ? 1 : 0), .6).toFixed(2)}" height="${bar}"><title>PID ${process.pid} page ${page} · frame F${id} · ${count > 1 ? `shared by ${count}` : 'exclusive'} · ${metric} counts ${kb(bytes)}</title></rect>`;
         x += w;
         return rect;
       }).join('');
@@ -334,12 +340,13 @@ function renderFlat(state: WorldState) {
     const id = process.pages[index] ?? null;
     const selected = selectedPage?.pid === process.pid && selectedPage.page === index ? 'selected' : id !== null && id === frameTrace ? 'is-linked' : '';
     const current = selected === 'selected' ? ' aria-current="true"' : '';
-    if (id === null) return `<button type="button" data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, ${escapeHtml(region.name)}, not resident"${current} class="page-chip is-absent ${selected}">${index} · —<small>${escapeHtml(region.name)}</small></button>`;
+    const motion = `data-motion="p/${process.pid}/page/${index}"`;
+    if (id === null) return `<button type="button" ${motion} data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, ${escapeHtml(region.name)}, not resident"${current} class="page-chip is-absent ${selected}">${index} · —<small>${escapeHtml(region.name)}</small></button>`;
     const count = sharers(state, id);
-    return `<button type="button" data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, ${escapeHtml(region.name)}, frame ${id}, ${count > 1 ? `shared by ${count}` : 'exclusive'}"${current} class="page-chip ${count > 1 ? 'is-shared' : ''} ${selected}">${index}→F${id}<small>${escapeHtml(region.name)}</small></button>`;
+    return `<button type="button" ${motion} data-page="${index}" data-page-pid="${process.pid}" aria-label="PID ${process.pid} virtual page ${index}, ${escapeHtml(region.name)}, frame ${id}, ${count > 1 ? `shared by ${count}` : 'exclusive'}"${current} class="page-chip ${count > 1 ? 'is-shared' : ''} ${selected}">${index}→F${id}<small>${escapeHtml(region.name)}</small></button>`;
   };
   const processSelected = (pid: number) => selectedPid === pid && selectedPage === null && selectedStructure === null && selectedFrame === null && selectedObjectId === null;
-  root.querySelector('#flat-host')!.innerHTML = `<h2 class="flat-title">Process address spaces</h2><div class="flat-processes">${state.processes.map(process => `<div class="flat-process ${processSelected(process.pid) ? 'selected' : ''}"><button type="button" data-pid="${process.pid}"${processSelected(process.pid) ? ' aria-current="true"' : ''}><strong>${process.role} · PID ${process.pid}</strong><span>${process.status === 'zombie' ? 'Zombie · mappings released' : `PPID ${process.parentPid ?? '—'} · ${residentPages(process)} of ${mappedPages(process)} pages resident · ${process.threadIds.length} thread(s)`}</span>${showAccounting && process.status === 'running' ? `<span class="flat-accounting">${accountingLabel(state, process.pid)}</span>` : ''}</button><div class="page-strip">${process.regions.flatMap(region => regionPages(region).map(index => chip(process, index, region))).join('')}</div>${process.status === 'running' ? `<div class="structure-list" role="group" aria-label="PID ${process.pid} scene parts">${structureButtons(state, process.pid)}</div>` : ''}</div>`).join('')}</div><h2 class="flat-title">Physical frames</h2><div class="flat-frames">${state.frames.map(frame => `<button type="button" data-frame="${frame.id}"${selectedFrame === frame.id ? ' aria-current="true"' : ''} class="flat-frame ${selectedFrame === frame.id ? 'selected' : frame.id === frameTrace ? 'is-linked' : ''}"><strong>F${frame.id}</strong><span>${escapeHtml(frame.region)}</span><small>${sharers(state, frame.id)} ${sharers(state, frame.id) === 1 ? 'mapping' : 'mappings'}</small></button>`).join('')}</div><h2 class="flat-title">Kernel objects</h2><div class="flat-frames">${state.kernelObjects.map(object => `<button type="button" data-object="${escapeHtml(object.id)}"${selectedObjectId === object.id ? ' aria-current="true"' : ''} class="flat-frame ${selectedObjectId === object.id ? 'selected' : object.id === objectTrace ? 'is-linked' : ''}"><strong>${escapeHtml(object.kind)}</strong><span>${escapeHtml(object.id)}</span><small>${objectRefCount(state, object.id)} descriptor(s)${object.kind === 'file' ? ` · offset ${object.offset}` : ''}</small></button>`).join('')}</div><p class="flat-note">Select a page to find its frame, or a frame to find every page mapped to it. A stacked chip shares its frame with another mapping, and a dash marks a page that is mapped but not resident. Descriptors in several processes can refer to one kernel object.</p>`;
+  root.querySelector('#flat-host')!.innerHTML = `<h2 class="flat-title" data-motion="flat/processes">Process address spaces</h2><div class="flat-processes">${state.processes.map(process => `<div class="flat-process ${processSelected(process.pid) ? 'selected' : ''}" data-motion="p/${process.pid}"><button type="button" data-pid="${process.pid}"${processSelected(process.pid) ? ' aria-current="true"' : ''}><strong>${process.role} · PID ${process.pid}</strong><span>${process.status === 'zombie' ? 'Zombie · mappings released' : `PPID ${process.parentPid ?? '—'} · ${residentPages(process)} of ${mappedPages(process)} pages resident · ${process.threadIds.length} thread(s)`}</span>${showAccounting && process.status === 'running' ? `<span class="flat-accounting">${accountingLabel(state, process.pid)}</span>` : ''}</button><div class="page-strip">${process.regions.flatMap(region => regionPages(region).map(index => chip(process, index, region))).join('')}</div>${process.status === 'running' ? `<div class="structure-list" role="group" aria-label="PID ${process.pid} scene parts">${structureButtons(state, process.pid)}</div>` : ''}</div>`).join('')}</div><h2 class="flat-title" data-motion="flat/frames">Physical frames</h2><div class="flat-frames">${state.frames.map(frame => `<button type="button" data-motion="f/${frame.id}" data-frame="${frame.id}"${selectedFrame === frame.id ? ' aria-current="true"' : ''} class="flat-frame ${selectedFrame === frame.id ? 'selected' : frame.id === frameTrace ? 'is-linked' : ''}"><strong>F${frame.id}</strong><span>${escapeHtml(frame.region)}</span><small>${sharers(state, frame.id)} ${sharers(state, frame.id) === 1 ? 'mapping' : 'mappings'}</small></button>`).join('')}</div><h2 class="flat-title" data-motion="flat/objects">Kernel objects</h2><div class="flat-frames">${state.kernelObjects.map(object => `<button type="button" data-motion="o/${escapeHtml(object.id)}" data-object="${escapeHtml(object.id)}"${selectedObjectId === object.id ? ' aria-current="true"' : ''} class="flat-frame ${selectedObjectId === object.id ? 'selected' : object.id === objectTrace ? 'is-linked' : ''}"><strong>${escapeHtml(object.kind)}</strong><span>${escapeHtml(object.id)}</span><small>${objectRefCount(state, object.id)} descriptor(s)${object.kind === 'file' ? ` · offset ${object.offset}` : ''}</small></button>`).join('')}</div><p class="flat-note" data-motion="flat/note">Select a page to find its frame, or a frame to find every page mapped to it. A stacked chip shares its frame with another mapping, and a dash marks a page that is mapped but not resident. Descriptors in several processes can refer to one kernel object.</p>`;
 }
 
 function structureButtons(state: WorldState, pid: number): string {
@@ -393,7 +400,8 @@ function renderTimeline(state: WorldState) {
   if (live.textContent !== narration) live.textContent = narration;
 }
 
-function render() {
+/** Draws the current state. A step animates: marks and scene objects move from where they were drawn, and a new process comes out of its parent. */
+function render(animate = false) {
   const focused = document.activeElement as HTMLElement | null;
   const focusAttributes = focused ? ['id', 'href', 'data-lab', 'data-pid', 'data-ledger-pid', 'data-page', 'data-page-pid', 'data-frame', 'data-object', 'data-structure', 'data-structure-pid', 'data-structure-index', 'data-step'].flatMap(name => focused.hasAttribute(name) ? [[name, focused.getAttribute(name)]] : []) : [];
   const state = world();
@@ -408,13 +416,16 @@ function render() {
       || selectedStructure.part === 'stack' && state.processes.length < 2) selectedStructure = null;
   }
   const detail = selectionDetail(state, { pid: selectedPid, page: selectedPage, frame: selectedFrame, objectId: selectedObjectId, structure: selectedStructure }, pid => `<div class="structure-list" aria-label="Inspect scene parts">${structureButtons(state, pid)}</div>`);
+  const playMarks = animate ? captureMarks(root) : null;
   renderChrome(); renderScenarioPanel(); renderFlat(state); renderInspector(detail); renderSelectionCard(detail); renderLedger(state); renderTimeline(state);
   host.hidden = flat;
   (root.querySelector('#flat-host') as HTMLElement).hidden = !flat;
   root.querySelector('#view-toggle')!.innerHTML = flat ? '<span aria-hidden="true">◈</span> 3D view' : '<span aria-hidden="true">▦</span> Flat view';
   root.querySelectorAll<HTMLButtonElement>('.camera-controls button').forEach(button => { button.disabled = flat; });
-  if (scene) scene.showAccounting = accountingVisible();
-  scene?.setWorld(state, selectedPid, selectedPage, selectedFrame, selectedObjectId, selectedStructure, selection => { selectVisual(selection); });
+  if (scene) { scene.showAccounting = accountingVisible(); scene.changedSince = labelBaseline(); }
+  scene?.setWorld(state, selectedPid, selectedPage, selectedFrame, selectedObjectId, selectedStructure, selection => { selectVisual(selection); }, animate);
+  playMarks?.(stepLinks(shownWorld ?? state, state).enter);
+  shownWorld = state;
   if (focused && !focused.isConnected && focusAttributes.length) {
     const replacement = [...root.querySelectorAll<HTMLElement>(focused.tagName.toLowerCase())].find(element => focusAttributes.every(([name, value]) => element.getAttribute(name!) === value));
     replacement?.focus({ preventScroll: true });
@@ -442,7 +453,7 @@ function runAction(action: Action): boolean {
     step = sandboxStep = sandboxHistory.length - 1;
     actionError = '';
   } catch (error) { actionError = error instanceof Error ? error.message : String(error); render(); return false; }
-  render();
+  render(true);
   return true;
 }
 

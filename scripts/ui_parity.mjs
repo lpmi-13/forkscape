@@ -100,6 +100,18 @@ async function runJourneys(flat) {
   const layouts = new Set([await layout(page)]);
   for (let index = 1; index < 9; index++) { await page.locator('#scenario-next').click(); layouts.add(await layout(page)); }
   assert.equal(layouts.size, 1, 'stepping does not move the chart or what follows it');
+  // A step eases its marks into place, unless the reader asks for reduced motion. The previous step's motion is finished first, since a mark
+  // caught mid-transition can already be where the next step puts it; counting in the click's own task keeps timing out of it.
+  const stepMarks = selector => page.evaluate(selector => {
+    const moving = () => document.getAnimations().filter(animation => animation.effect?.target?.matches('[data-motion]'));
+    moving().forEach(animation => animation.finish());
+    document.querySelector(selector).click();
+    return moving().length;
+  }, selector);
+  assert.ok(await stepMarks('#scenario-prev') > 0, 'stepping animates the chart, comparison, and flat view');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await stepMarks('#scenario-next'), 0, 'with reduced motion, a step snaps into place');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   assert.equal(await stepLabel(page), 'STEP 9 / 9');
   assert.equal(await page.locator('#scenario-next').isDisabled(), true);
   assert.match(await legend(page), /Worker 4101 RSS\s*40 KiB/);
@@ -121,7 +133,12 @@ async function runJourneys(flat) {
   await page.locator('[data-chart-step="4"]').click({ force: true });
   assert.equal(await stepLabel(page), 'STEP 5 / 9');
   assert.match(await page.locator('.step-slide.is-current .step-event').innerText(), /RSS is unchanged/);
-  if (!flat) await assertLabelsSeparate(page);
+  if (!flat) {
+    await assertLabelsSeparate(page);
+    // A step labels only what it changed from the step before: here the worker's copy of catalog page 8 and the frame it copied.
+    assert.deepEqual(await page.locator('.frame-label').evaluateAll(labels => labels.map(label => label.firstChild.textContent)), ['F8', 'F14'], 'a step labels only the frames it changed');
+    assert.equal(await page.locator('.scene-label', { hasText: 'PHYSICAL FRAMES' }).count(), 0, 'layer names are labelled on a scenario’s first step only');
+  }
 
   await openPanel(page, 'inspector');
   assert.match(await page.locator('#inspector h2').innerText(), /Virtual page 8/, 'each step points the inspector at the page it touched');
@@ -185,6 +202,14 @@ async function runJourneys(flat) {
   await page.goto(`${url}#no-preload`);
   await page.locator('.contrast').waitFor();
   assert.match(await page.locator('.contrast').innerText(), /With preload\s*108 KiB higher\s*36 KiB\s*Without preload\s*96 KiB\s*48 KiB higher/, 'Σ RSS and Σ PSS rank preload opposite ways');
+
+  if (!flat) {
+    await page.goto(`${url}#thread-lock`);
+    await page.locator('#scenario-prev').waitFor();
+    for (let index = 1; index < 4; index++) await page.locator('#scenario-next').click();
+    await page.locator('.scene-label.label-absent', { hasText: 'thread 5000 absent · holds export-queue' }).waitFor();
+    assert.equal(await page.locator('.scene-label', { hasText: 'thread 4101' }).count(), 1, 'the worker labels its one thread and the lock owner fork left behind');
+  }
 
   for (const id of scenarioIds) {
     await page.goto(`${url}#${id}`);
