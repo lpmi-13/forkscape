@@ -3,7 +3,7 @@ import './theme.css';
 import './reference.css';
 import { escapeHtml, kb, regionPages, selectionDetail, type Detail } from './detail';
 import { applyAction, assertInvariants, chargedBytes, initialWorld, mappedPages, memoryRows, objectRefCount, pageTableBytes, physicalBytes, pssBreakdown, regionForPage, residentPages, sharers, type Action, type ProcessState, type RegionState, type WorldState } from './model';
-import { scenarioById, scenarios, scenarioStates, seriesValue, stepFocus, type ChartSeries, type Scenario } from './scenarios';
+import { scenarioById, scenarios, scenarioStates, seriesValue, stepFocus, type ChartSeries, type Scenario, type ScenarioRun } from './scenarios';
 import { captureMarks, stepLinks } from './motion';
 import type { ForkScene, SceneSelection, StructurePart } from './scene';
 
@@ -17,10 +17,12 @@ let history: WorldState[] = [initialWorld()];
 let step = 0;
 let sandboxHistory: WorldState[] = [initialWorld()];
 let sandboxStep = 0;
-let sandboxOrigin: { scenario: Scenario; step: number } | null = null;
+let sandboxOrigin: { scenario: Scenario; step: number; fixed: boolean } | null = null;
+// A scenario replays its problem, or the same setup with its fix applied.
+let fixed = false;
 // The state last drawn, so a step can link what it adds to what was there.
 let shownWorld: WorldState | null = null;
-const scenarioHistories = new Map<string, WorldState[]>();
+const runHistories = new Map<ScenarioRun, WorldState[]>();
 let selectedPid = 4100;
 let selectedFrame: number | null = null;
 let selectedObjectId: string | null = null;
@@ -40,12 +42,14 @@ const narrow = matchMedia('(max-width: 899px)');
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 const world = () => history[step];
-const statesFor = (scenario: Scenario) => {
-  if (!scenarioHistories.has(scenario.id)) scenarioHistories.set(scenario.id, scenarioStates(scenario));
-  return scenarioHistories.get(scenario.id)!;
+const statesFor = (run: ScenarioRun) => {
+  if (!runHistories.has(run)) runHistories.set(run, scenarioStates(run));
+  return runHistories.get(run)!;
 };
+const activeRun = (scenario: Scenario): ScenarioRun => fixed ? scenario.fix : scenario;
+const chartOf = (scenario: Scenario) => activeRun(scenario).chart ?? scenario.chart;
 // Chart colour follows the metric, so RSS is the same colour in every scenario.
-const metricClass = (series: ChartSeries) => series.metric === 'rss' || series.metric === 'sumRss' ? 'metric-rss' : series.metric === 'pss' || series.metric === 'uss' ? 'metric-pss' : 'metric-memory';
+const metricClass = (series: ChartSeries) => series.metric === 'rss' || series.metric === 'sumRss' ? 'metric-rss' : series.metric === 'pss' || series.metric === 'uss' || series.metric === 'sumPss' ? 'metric-pss' : 'metric-memory';
 const sumOf = (state: WorldState, key: 'rss' | 'pss') => memoryRows(state).reduce((sum, row) => sum + row[key], 0);
 // The RSS/PSS comparison is shown when a scenario depends on it, or when the reader opens it.
 const accountingVisible = () => mode.kind === 'scenario' ? !!mode.scenario.accounting || mode.scenario.group === 'memory' && accountingOpen : mode.kind === 'sandbox' && accountingOpen;
@@ -127,7 +131,7 @@ function resetView() {
 }
 function clearSelection() { selectedFrame = null; selectedObjectId = null; selectedPage = null; selectedStructure = null; }
 function focusScenarioStep(scenario: Scenario) {
-  const focus = stepFocus(scenario, step, world());
+  const focus = stepFocus(activeRun(scenario), step, world());
   clearSelection();
   selectedPid = focus.pid;
   selectedPage = focus.page === null ? null : { pid: focus.pid, page: focus.page };
@@ -139,11 +143,19 @@ function goToStep(index: number) {
   else if (mode.kind === 'sandbox') sandboxStep = step;
   render(true);
 }
+// Switching between the problem and its fix keeps the step, so the same moment can be compared in both runs.
+function showRun(fix: boolean) {
+  if (mode.kind !== 'scenario' || fix === fixed) return;
+  fixed = fix; history = statesFor(activeRun(mode.scenario)); step = Math.min(step, history.length - 1);
+  selectionCardOpen = false;
+  focusScenarioStep(mode.scenario);
+  render();
+}
 
 function applyHash(userNavigation: boolean) {
   const id = decodeURIComponent(location.hash.slice(1));
   const scenario = scenarioById(id);
-  actionError = ''; selectionCardOpen = false;
+  actionError = ''; selectionCardOpen = false; fixed = false;
   if (id === 'explore') {
     mode = { kind: 'sandbox' }; history = sandboxHistory; step = sandboxStep; clearSelection();
   } else if (scenario) {
@@ -172,13 +184,21 @@ function niceCeiling(value: number) {
   return [16, 32, 48, 64, 96, 128, 160, 192, 256, 384, 512, 768, 1024].find(candidate => candidate >= value * 1.05) ?? Math.ceil(value / 256) * 256;
 }
 
+// The problem and the fix share one scale, so switching runs redraws the lines against the same axis.
+function chartScale(scenario: Scenario) {
+  return niceCeiling(Math.max(...[scenario, scenario.fix].flatMap(run => {
+    const chart = (run.chart ?? scenario.chart)!;
+    return statesFor(run).flatMap(state => [...chart.series.map(series => seriesValue(state, series) ?? 0), chart.limit ? state.limitBytes ?? 0 : 0]);
+  })) / 1024);
+}
+
 function renderChart(scenario: Scenario, states: WorldState[]) {
-  const chart = scenario.chart;
+  const chart = chartOf(scenario);
   if (!chart) return '';
   const width = 360, height = 154, left = 54, right = 14, top = 12, bottom = 26;
   const values = chart.series.map(series => states.map(state => { const value = seriesValue(state, series); return value === null ? null : value / 1024; }));
   const limit = chart.limit ? states.find(state => state.limitBytes !== null)?.limitBytes ?? null : null;
-  const yMax = niceCeiling(Math.max(...values.flat().filter((value): value is number => value !== null), limit === null ? 0 : limit / 1024));
+  const yMax = chartScale(scenario);
   const x = (index: number) => left + (states.length === 1 ? 0 : index * (width - left - right) / (states.length - 1));
   const y = (value: number) => top + (1 - value / yMax) * (height - top - bottom);
   const path = (series: (number | null)[]) => series.reduce<string>((d, value, index) => value === null ? d : `${d}${index === 0 || series[index - 1] === null ? 'M' : 'L'}${x(index).toFixed(1)},${y(value).toFixed(1)}`, '');
@@ -205,7 +225,7 @@ function renderChart(scenario: Scenario, states: WorldState[]) {
 function showChartTip(target: SVGRectElement) {
   const figure = target.closest<HTMLElement>('.chart');
   if (mode.kind !== 'scenario' || !figure) return;
-  const index = Number(target.dataset.chartStep), series = mode.scenario.chart!.series, state = history[index];
+  const index = Number(target.dataset.chartStep), series = chartOf(mode.scenario)!.series, state = history[index];
   const tip = figure.querySelector<HTMLElement>('.chart-tip')!, hover = figure.querySelector<SVGLineElement>('.chart-hover')!;
   const centre = Number(target.getAttribute('x')) + Number(target.getAttribute('width')) / 2;
   hover.setAttribute('x1', String(centre)); hover.setAttribute('x2', String(centre)); hover.removeAttribute('hidden');
@@ -235,9 +255,10 @@ function renderAccounting(state: WorldState) {
   if (!running.length) return '<p class="accounting-empty">No running process has resident pages.</p>';
   const rows = memoryRows(state);
   const width = 360, nameWidth = 64, metricWidth = 36, valueWidth = 76, bar = 14, rowGap = 4, groupGap = 14;
-  // One scale and one height for the whole timeline: stepping grows the bars instead of rescaling them or moving what follows.
-  const slots = Math.max(running.length, ...history.map(item => item.processes.filter(process => process.status === 'running' && residentPages(process) > 0).length));
-  const scale = (width - nameWidth - metricWidth - valueWidth) / Math.max(...[state, ...history].flatMap(item => memoryRows(item).map(row => row.rss)));
+  // One scale and one height for the whole timeline, and for both of a scenario's runs: stepping or switching runs grows the bars instead of rescaling them or moving what follows.
+  const timeline = mode.kind === 'scenario' ? [...statesFor(mode.scenario), ...statesFor(mode.scenario.fix)] : history;
+  const slots = Math.max(running.length, ...timeline.map(item => item.processes.filter(process => process.status === 'running' && residentPages(process) > 0).length));
+  const scale = (width - nameWidth - metricWidth - valueWidth) / Math.max(...[state, ...timeline].flatMap(item => memoryRows(item).map(row => row.rss)));
   const group = 2 * bar + rowGap, height = slots * group + (slots - 1) * groupGap + 2;
   const svg = running.map((process, index) => {
     const top = 1 + index * (group + groupGap), row = rows.find(item => item.pid === process.pid)!;
@@ -267,7 +288,7 @@ function renderAccounting(state: WorldState) {
 
 function renderContrast(scenario: Scenario) {
   const contrast = scenario.contrast!, other = scenarioById(contrast.scenario)!;
-  const finals = [{ label: `<a href="#${other.id}">${escapeHtml(contrast.label)}</a>`, state: statesFor(other).at(-1)! }, { label: escapeHtml(contrast.ownLabel), state: history.at(-1)! }];
+  const finals = [{ label: `<a href="#${other.id}">${escapeHtml(contrast.label)}</a>`, state: statesFor(other).at(-1)! }, { label: escapeHtml(contrast.ownLabel), state: statesFor(scenario).at(-1)! }];
   const cell = (key: 'rss' | 'pss', index: number) => {
     const [mine, theirs] = [sumOf(finals[index].state, key), sumOf(finals[1 - index].state, key)];
     return `<td class="${mine > theirs ? 'is-higher' : ''}">${kb(mine)}${mine > theirs ? ' <small>higher</small>' : ''}</td>`;
@@ -283,18 +304,23 @@ function renderAccountingSection(scenario: Scenario | null) {
 function renderScenario(scenario: Scenario) {
   const states = history, index = scenarios.filter(item => item.group === scenario.group).indexOf(scenario) + 1;
   const total = scenarios.filter(item => item.group === scenario.group).length;
+  const runButton = (run: 'problem' | 'fix', label: string) => `<button type="button" data-run="${run}" aria-pressed="${(run === 'fix') === fixed}">${label}</button>`;
+  // Both runs' steps share one grid cell, so switching runs moves nothing below the stepper either.
+  const slides = [scenario, scenario.fix].flatMap(run => run.steps.map((item, index) => `<div class="step-slide${run === activeRun(scenario) && index === step ? ' is-current' : ''}"><p class="step-caption">${escapeHtml(item.caption)}</p><p class="step-event">${escapeHtml(statesFor(run)[index].events.at(-1)!.description)}</p></div>`));
   return `<a class="back-link" href="#scenarios"><span aria-hidden="true">←</span> All scenarios</a>
     <div class="lesson-kicker">${escapeHtml(groupLabels[scenario.group])} · ${index} of ${total}</div>${sheetHead(scenario.title, 'Scenario details')}
     <p class="symptom">${escapeHtml(scenario.symptom)}</p>
     <div class="step-detail"><h2 class="section-tag">This step</h2><p>${escapeHtml(states[step].events.at(-1)!.description)}</p></div>
-    <div class="stepper">
+    <div class="stepper${fixed ? ' is-fix' : ''}">
+      <div class="run-toggle" role="group" aria-label="Replay">${runButton('problem', 'The problem')}${runButton('fix', 'The fix')}</div>
       <div class="stepper-controls"><button id="scenario-prev" type="button" ${step === 0 ? 'disabled' : ''}><span aria-hidden="true">◀</span> Back</button><span class="step-count">Step ${step + 1} / ${states.length}</span><button id="scenario-next" class="step-next" type="button" ${step === states.length - 1 ? 'disabled' : ''}>Next <span aria-hidden="true">▶</span></button></div>
-      <div class="step-slides">${scenario.steps.map((item, index) => `<div class="step-slide${index === step ? ' is-current' : ''}"><p class="step-caption">${escapeHtml(item.caption)}</p><p class="step-event">${escapeHtml(states[index].events.at(-1)!.description)}</p></div>`).join('')}</div>
+      <div class="step-slides">${slides.join('')}</div>
     </div>
     ${renderChart(scenario, states)}
     ${scenario.group === 'memory' ? renderAccountingSection(scenario) : ''}
-    <div class="scenario-note"><h2 class="section-tag">What to watch</h2><p>${escapeHtml(scenario.watch)}</p></div>
+    <div class="scenario-note"><h2 class="section-tag">What to watch</h2><p>${escapeHtml(activeRun(scenario).watch)}</p></div>
     <div class="scenario-note"><h2 class="section-tag">Why</h2><p>${escapeHtml(scenario.mechanism)}</p></div>
+    <div class="scenario-note fix-note"><h2 class="section-tag">The fix</h2><p>${escapeHtml(scenario.fix.change)}</p><p>${escapeHtml(scenario.fix.cost)}</p></div>
     <div class="on-call"><h2 class="section-tag">In production</h2><p>${escapeHtml(scenario.production)}</p><code>${escapeHtml(scenario.evidence)}</code></div>
     ${scenario.reference ? `<details class="reference-evidence scenario-reference"><summary>Linux reference observation</summary><p>${escapeHtml(scenario.reference)}</p></details>` : ''}
     <button id="explore-here" class="event-button" type="button">Explore from this step</button>
@@ -314,7 +340,7 @@ function renderSandbox() {
   const button = (label: string, action: string, enabled = true) => `<button type="button" data-lab="${action}" ${enabled ? '' : 'disabled'}>${label}</button>`;
   return `<a class="back-link" href="#scenarios"><span aria-hidden="true">←</span> All scenarios</a>
     <div class="lesson-kicker">Free exploration</div>${sheetHead('Change the model yourself', 'Model controls and notes')}
-    <p class="lesson-body">${sandboxOrigin ? `Started from step ${sandboxOrigin.step + 1} of <a href="#${sandboxOrigin.scenario.id}">${escapeHtml(sandboxOrigin.scenario.title)}</a>. ` : ''}Select a process or page, then act on it. Each action adds a state to the event timeline.</p>
+    <p class="lesson-body">${sandboxOrigin ? `Started from step ${sandboxOrigin.step + 1} of <a href="#${sandboxOrigin.scenario.id}">${escapeHtml(sandboxOrigin.scenario.title)}</a>${sandboxOrigin.fixed ? ', with the fix' : ''}. ` : ''}Select a process or page, then act on it. Each action adds a state to the event timeline.</p>
     <div class="lab-dock"><div class="lab-actions">${button('Fork master', 'fork', state.processes[0]?.pid === 4100 && state.processes[0].status === 'running')}${button(page === null ? 'Read a selected page' : `Read page ${page}`, 'read', !!active && page !== null)}${button(page === null ? 'Write a selected page' : `Write page ${page}`, 'write', !!active && page !== null && !!pageRegion?.writable)}${button('Exit selected worker', 'exit', !!worker && !!active)}${button('Reap selected zombie', 'reap', !!worker && !!zombie)}</div>
       <p id="action-error" class="action-error">${escapeHtml(actionError)}</p>
       <div class="scenario-note last-event"><h2 class="section-tag">Last event</h2><p>${escapeHtml(state.events.at(-1)!.description)}</p></div></div>
@@ -386,16 +412,16 @@ function renderTimeline(state: WorldState) {
   range.setAttribute('aria-valuetext', mode.kind === 'scenario' ? `Step ${step + 1} of ${history.length}` : `State ${step + 1} of ${history.length}`);
   (root.querySelector('#prev-step') as HTMLButtonElement).disabled = step === 0;
   (root.querySelector('#next-step') as HTMLButtonElement).disabled = step === history.length - 1;
-  const scenario = mode.kind === 'scenario' ? mode.scenario : null;
-  root.querySelector('#step-label')!.textContent = scenario ? `Step ${step + 1} / ${history.length}` : `${step + 1} / ${history.length}`;
-  root.querySelector('#event-count')!.textContent = scenario ? 'Scenario · model' : `${history.length} states`;
+  const run = mode.kind === 'scenario' ? activeRun(mode.scenario) : null;
+  root.querySelector('#step-label')!.textContent = run ? `Step ${step + 1} / ${history.length}` : `${step + 1} / ${history.length}`;
+  root.querySelector('#event-count')!.textContent = run ? `${fixed ? 'The fix' : 'Scenario'} · model` : `${history.length} states`;
   root.querySelector('#event-strip')!.innerHTML = history.map((item, index) => {
     const kind = item.events.at(-1)!.kind;
-    const label = scenario ? `Step ${index + 1}: ${scenario.steps[index].caption}` : `State ${index + 1}: ${kind}`;
-    return `<button type="button" data-step="${index}" class="event-tick ${index === step ? 'active' : ''}" aria-label="${escapeHtml(label)}"${index === step ? ' aria-current="step"' : ''}><span class="tick-icon">${eventIcons[kind] ?? '•'}</span><span>${scenario ? index + 1 : escapeHtml(kind.replace('_', ' '))}</span></button>`;
+    const label = run ? `Step ${index + 1}: ${run.steps[index].caption}` : `State ${index + 1}: ${kind}`;
+    return `<button type="button" data-step="${index}" class="event-tick ${index === step ? 'active' : ''}" aria-label="${escapeHtml(label)}"${index === step ? ' aria-current="step"' : ''}><span class="tick-icon">${eventIcons[kind] ?? '•'}</span><span>${run ? index + 1 : escapeHtml(kind.replace('_', ' '))}</span></button>`;
   }).join('');
   // Rewriting a live region with the same text can repeat it, so only a change is written. A failed action is announced here, once.
-  const narration = actionError || (scenario ? `Step ${step + 1}. ${scenario.steps[step].caption}` : state.events.at(-1)!.description);
+  const narration = actionError || (run ? `Step ${step + 1}. ${run.steps[step].caption}` : state.events.at(-1)!.description);
   const live = root.querySelector('#narration')!;
   if (live.textContent !== narration) live.textContent = narration;
 }
@@ -403,7 +429,7 @@ function renderTimeline(state: WorldState) {
 /** Draws the current state. A step animates: marks and scene objects move from where they were drawn, and a new process comes out of its parent. */
 function render(animate = false) {
   const focused = document.activeElement as HTMLElement | null;
-  const focusAttributes = focused ? ['id', 'href', 'data-lab', 'data-pid', 'data-ledger-pid', 'data-page', 'data-page-pid', 'data-frame', 'data-object', 'data-structure', 'data-structure-pid', 'data-structure-index', 'data-step'].flatMap(name => focused.hasAttribute(name) ? [[name, focused.getAttribute(name)]] : []) : [];
+  const focusAttributes = focused ? ['id', 'href', 'data-run', 'data-lab', 'data-pid', 'data-ledger-pid', 'data-page', 'data-page-pid', 'data-frame', 'data-object', 'data-structure', 'data-structure-pid', 'data-structure-index', 'data-step'].flatMap(name => focused.hasAttribute(name) ? [[name, focused.getAttribute(name)]] : []) : [];
   const state = world();
   if (!state.processes.some(p => p.pid === selectedPid)) selectedPid = state.processes[0]?.pid ?? 4100;
   if (selectedFrame !== null && !state.frames.some(f => f.id === selectedFrame)) selectedFrame = null;
@@ -478,10 +504,12 @@ root.addEventListener('click', event => {
   if (zoom) { scene?.setZoom(zoom.dataset.zoom === 'in'); return; }
   const chartStep = target.closest<SVGElement>('[data-chart-step]');
   if (chartStep) { goToStep(Number(chartStep.dataset.chartStep)); return; }
+  const runButton = target.closest<HTMLElement>('[data-run]');
+  if (runButton) { showRun(runButton.dataset.run === 'fix'); return; }
   if (target.closest('#scenario-prev')) { goToStep(step - 1); return; }
   if (target.closest('#scenario-next')) { goToStep(step + 1); return; }
   if (target.closest('#explore-here') && mode.kind === 'scenario') {
-    resetSandbox(world(), { scenario: mode.scenario, step });
+    resetSandbox(world(), { scenario: mode.scenario, step, fixed });
     location.hash = 'explore';
     return;
   }

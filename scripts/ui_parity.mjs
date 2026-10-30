@@ -119,6 +119,22 @@ async function runJourneys(flat) {
   assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*72 KiB/);
   assert.match(await page.locator('.accounting.key').innerText(), /Σ RSS\s*88 KiB\s*Σ PSS · in use\s*72 KiB\s*RSS overcount\s*16 KiB/, 'the RSS vs PSS callout is shown where it is the point');
   assert.match(await deckAccounting(page, flat, 4101), /RSS 40 (KiB )?· PSS 32 KiB/);
+  // The fix replays the same setup with one change, from the same step and against the same chart scale.
+  const beforeFix = [await layout(page), await page.locator('.step-slides').evaluate(slides => slides.offsetHeight), await page.locator('.chart-tick').allInnerTexts()];
+  await page.locator('[data-run="fix"]').click();
+  assert.equal(await page.locator('[data-run="fix"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.stepper.is-fix').count(), 1, 'the stepper is framed in the fix’s colour');
+  assert.equal(await stepLabel(page), 'STEP 9 / 9', 'switching to the fix keeps the step');
+  assert.match(await page.locator('.step-slide.is-current .step-caption').innerText(), /Requests 7 and 8 look up entries/);
+  assert.match(await legend(page), /Worker 4101 RSS\s*40 KiB/);
+  assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*52 KiB/, 'with the fix, the catalog stays shared');
+  assert.deepEqual([await layout(page), await page.locator('.step-slides').evaluate(slides => slides.offsetHeight), await page.locator('.chart-tick').allInnerTexts()], beforeFix, 'switching runs moves nothing and keeps the chart’s scale');
+  assert.match(await page.locator('.fix-note').innerText(), /flat buffer/);
+  await openPanel(page, 'timeline');
+  assert.equal(await page.locator('#event-count').innerText(), 'The fix · model');
+  await openPanel(page, 'scenarios');
+  await page.locator('[data-run="problem"]').click();
+  assert.match(await legend(page), /Memory in use \(Σ PSS\)\s*72 KiB/);
   await page.locator('.acct-seg[data-page-pid="4100"][data-page="3"]').first().click();
   assert.match(await page.locator('#selection-card h2').innerText(), /Virtual page 3/);
   await page.keyboard.press('Escape');
@@ -217,10 +233,13 @@ async function runJourneys(flat) {
     const total = Number((await stepLabel(page)).split('/ ')[1]);
     for (let index = 1; index < total; index++) await page.locator('#scenario-next').click();
     assert.equal(await stepLabel(page), `STEP ${total} / ${total}`, `${id} reaches its last step`);
+    await page.locator('[data-run="fix"]').click();
+    for (let index = 1; index < total; index++) await page.locator('#scenario-prev').click();
+    assert.equal(await stepLabel(page), `STEP 1 / ${total}`, `${id}’s fix steps back to its first step`);
   }
   assert.deepEqual(errors, []);
   await page.close();
-  console.log(`${flat ? 'Flat' : '3D'} mode stepped through all ${scenarioIds.length} scenarios; chart, RSS/PSS comparison, panels, view switch, and free exploration passed.`);
+  console.log(`${flat ? 'Flat' : '3D'} mode stepped through all ${scenarioIds.length} scenarios and their fixes; chart, RSS/PSS comparison, panels, view switch, and free exploration passed.`);
 }
 
 async function runPhoneCheck() {
@@ -236,11 +255,14 @@ async function runPhoneCheck() {
   assert.ok(caption.y >= panel.y && caption.y + caption.height <= 844, 'the first step is readable on arrival without scrolling');
   assert.equal(await page.locator('.chart').isVisible(), false, 'the collapsed sheet holds only the step');
   assert.equal(await page.locator('.step-slide.is-current .step-event').isVisible(), false, 'the step detail waits in the expanded sheet');
+  assert.equal(await page.locator('[data-run="fix"]').isVisible(), false, 'the collapsed sheet keeps the run choice with the notes');
 
   await page.locator('#sheet-toggle').click();
   assert.equal(await page.locator('#sheet-toggle').getAttribute('aria-expanded'), 'true');
   assert.equal(await page.locator('.chart').isVisible(), true, 'expanding the sheet shows the notes');
   assert.match(await page.locator('.step-detail').innerText(), /This step\s+\S/i, 'the expanded sheet carries the step detail');
+  await page.locator('[data-run="fix"]').click();
+  assert.match(await page.locator('.step-slide.is-current .step-caption').innerText(), /The limit is sized from a load test/, 'the expanded sheet switches to the fix');
   assert.ok(await sheet.evaluate(element => element.scrollWidth <= element.clientWidth), 'the scenario sheet does not scroll sideways');
   await sheet.evaluate(element => { element.scrollTop = element.scrollHeight; });
   const [next, expanded] = await Promise.all([page.locator('#scenario-next').boundingBox(), sheet.boundingBox()]);
@@ -252,6 +274,7 @@ async function runPhoneCheck() {
   await page.mouse.move(head.x + head.width / 3, head.y + head.height / 2 + 80, { steps: 4 });
   await page.mouse.up();
   assert.equal(await page.locator('.chart').isVisible(), false, 'swiping the head down collapses the sheet');
+  assert.equal(await page.locator('.stepper.is-fix').isVisible(), true, 'the collapsed dock still shows the fix in its colour');
 
   for (let index = 0; index < 6; index++) await page.locator('#scenario-next').click();
   await assertLabelsSeparate(page);

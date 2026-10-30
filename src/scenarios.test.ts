@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chargedBytes, memoryRows, physicalBytes, type WorldState } from './model.ts';
-import { DECAY_OOM_LIMIT, scenarioById, scenarioStates, scenarios, seriesValue, stepFocus } from './scenarios.ts';
+import { DECAY_OOM_LIMIT, DECAY_SIZED_LIMIT, scenarioById, scenarioStates, scenarios, seriesValue, stepFocus } from './scenarios.ts';
 
 const PAGE = 4096;
 const states = (id: string) => scenarioStates(scenarioById(id)!);
+const fixStates = (id: string) => scenarioStates(scenarioById(id)!.fix);
 const rss = (world: WorldState, pid: number) => memoryRows(world).find(row => row.pid === pid)?.rss;
 const pss = (world: WorldState, pid: number) => memoryRows(world).find(row => row.pid === pid)!.pss;
 const sumRss = (world: WorldState) => memoryRows(world).reduce((sum, row) => sum + row.rss, 0);
@@ -19,12 +20,18 @@ test('every scenario is deterministic, valid at each step, and points its chart 
     for (const id of scenario.related) assert.ok(scenarioById(id), `${scenario.id} links to ${id}`);
     if (scenario.contrast) assert.ok(scenarioById(scenario.contrast.scenario), `${scenario.id} contrasts with ${scenario.contrast.scenario}`);
     if (scenario.accounting) assert.equal(scenario.group, 'memory');
-    history.forEach((world, index) => {
-      const focus = stepFocus(scenario, index, world);
-      assert.ok(world.processes.some(process => process.pid === focus.pid), `${scenario.id} step ${index} focus`);
-    });
-    for (const series of scenario.chart?.series ?? []) {
-      assert.ok(history.some(world => seriesValue(world, series) !== null), `${scenario.id}: ${series.label} has data`);
+    // Switching to the fix keeps the reader's step, so both runs have the same number of steps.
+    assert.equal(scenario.fix.steps.length, scenario.steps.length, `${scenario.id}: the fix replays the same steps`);
+    for (const [run, label] of [[scenario, scenario.id], [scenario.fix, `${scenario.id} fix`]] as const) {
+      const runHistory = scenarioStates(run);
+      assert.deepEqual(runHistory, scenarioStates(run));
+      runHistory.forEach((world, index) => {
+        const focus = stepFocus(run, index, world);
+        assert.ok(world.processes.some(process => process.pid === focus.pid), `${label} step ${index} focus`);
+      });
+      for (const series of (run.chart ?? scenario.chart)?.series ?? []) {
+        assert.ok(runHistory.some(world => seriesValue(world, series) !== null), `${label}: ${series.label} has data`);
+      }
     }
   }
 });
@@ -105,4 +112,47 @@ test('inherited handles share one offset, and a lock held at fork stays held in 
   assert.equal(worker.locks[0].ownerTid, 5000);
   assert.ok(!worker.threadIds.includes(5000));
   assert.equal(released.processes[0].locks[0].ownerTid, null);
+});
+
+test('memory fixes stop the growth their problems show', () => {
+  // A flat buffer copies only the page holding its header; reading the rest copies nothing.
+  const buffer = fixStates('cow-decay');
+  assert.equal(physicalBytes(buffer.at(-1)!) - physicalBytes(buffer[1]), PAGE);
+  for (const world of buffer.slice(1)) assert.equal(rss(world, 4101), rss(buffer[1], 4101));
+  // A two-entry cache levels off once it is full.
+  const cache = fixStates('leak');
+  for (const world of cache.slice(4)) assert.equal(physicalBytes(world) - physicalBytes(cache[2]), 2 * PAGE);
+  // A limit sized after decay holds the copy that crossed the boot-time limit, and every later one.
+  const sized = fixStates('decay-oom');
+  assert.ok(chargedBytes(sized[6]) > DECAY_OOM_LIMIT);
+  assert.equal(physicalBytes(sized.at(-1)!) - physicalBytes(sized[1]), 2 * 6 * PAGE, 'both workers copy the whole catalog');
+  for (const world of sized) {
+    assert.ok(chargedBytes(world) <= DECAY_SIZED_LIMIT);
+    assert.ok(!world.events.some(event => event.kind === 'oom_kill'));
+  }
+});
+
+test('setup fixes share what each worker built for itself, and summing PSS reports memory in use', () => {
+  const pssDashboard = scenarioById('rss-overcount')!.fix.chart!.series.find(series => series.metric === 'sumPss')!;
+  assert.deepEqual(fixStates('rss-overcount'), states('rss-overcount'), 'the processes are unchanged; only the measurement is');
+  for (const world of fixStates('rss-overcount')) assert.equal(seriesValue(world, pssDashboard), physicalBytes(world));
+  // With the URLconf built in the master, the first request copies one page instead of allocating two.
+  const warmed = fixStates('worker-warmup');
+  assert.equal(physicalBytes(warmed[3]) - physicalBytes(warmed[2]), PAGE);
+  assert.equal(rss(warmed[3], 4101), rss(warmed[2], 4101));
+  // Preload brings no-preload's final state to the preloaded one: less memory, though a higher Σ RSS.
+  const preloaded = fixStates('no-preload').at(-1)!, perWorker = states('no-preload').at(-1)!;
+  assert.deepEqual(memoryRows(preloaded), memoryRows(states('rss-overcount').at(-1)!));
+  assert.ok(physicalBytes(preloaded) < physicalBytes(perWorker));
+  assert.ok(sumRss(preloaded) > sumRss(perWorker));
+});
+
+test('opening handles and starting threads after fork gives each worker its own', () => {
+  const offsets = fixStates('shared-offset').at(-1)!;
+  const files = offsets.kernelObjects.filter(object => object.kind === 'file');
+  assert.deepEqual(files.map(object => object.offset), [64, 64], 'each worker reads from its own offset');
+  assert.ok(!offsets.processes[0].descriptors.some(fd => files.some(object => object.id === fd.objectId)), 'the master holds no copy');
+  const worker = fixStates('thread-lock').at(-1)!.processes.find(process => process.pid === 4101)!;
+  assert.deepEqual(worker.threadIds, [4101, 5000]);
+  assert.deepEqual(worker.locks, [{ id: 'export-queue', ownerTid: null }]);
 });

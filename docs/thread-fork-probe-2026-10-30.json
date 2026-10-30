@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "source": "reference_linux_vm",
+  "captured_at": "2026-10-30T16:02:39.759052+00:00",
+  "distribution": "Ubuntu 24.04.5 LTS",
+  "kernel": "6.1.167",
+  "runs": [
+    {
+      "python": "3.11.18",
+      "gunicorn": "26.2.0",
+      "direct_fork": [
+        {
+          "case": "fork_in_main",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_main",
+          "warning_filter": "default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        }
+      ],
+      "gunicorn_preload": [
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "unset",
+          "warned": false,
+          "warning": []
+        },
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "default",
+          "warned": false,
+          "warning": []
+        }
+      ]
+    },
+    {
+      "python": "3.12.3",
+      "gunicorn": "26.2.0",
+      "direct_fork": [
+        {
+          "case": "fork_in_main",
+          "warning_filter": "interpreter default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/case.py:14: DeprecationWarning: This process (pid=1169) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_main",
+          "warning_filter": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/case.py:14: DeprecationWarning: This process (pid=1172) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/forker.py:4: DeprecationWarning: This process (pid=1178) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        }
+      ],
+      "gunicorn_preload": [
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "unset",
+          "warned": false,
+          "warning": []
+        },
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/py3.12/lib/python3.12/site-packages/gunicorn/arbiter.py:734: DeprecationWarning: This process (pid=1190) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ]
+        }
+      ]
+    },
+    {
+      "python": "3.13.18",
+      "gunicorn": "26.2.0",
+      "direct_fork": [
+        {
+          "case": "fork_in_main",
+          "warning_filter": "interpreter default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/case.py:14: DeprecationWarning: This process (pid=1197) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_main",
+          "warning_filter": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/case.py:14: DeprecationWarning: This process (pid=1200) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/forker.py:4: DeprecationWarning: This process (pid=1206) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        }
+      ],
+      "gunicorn_preload": [
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "unset",
+          "warned": false,
+          "warning": []
+        },
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/py3.13/lib/python3.13/site-packages/gunicorn/arbiter.py:734: DeprecationWarning: This process (pid=1218) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ]
+        }
+      ]
+    },
+    {
+      "python": "3.14.10",
+      "gunicorn": "26.2.0",
+      "direct_fork": [
+        {
+          "case": "fork_in_main",
+          "warning_filter": "interpreter default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/case.py:14: DeprecationWarning: This process (pid=1225) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_main",
+          "warning_filter": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/case.py:14: DeprecationWarning: This process (pid=1228) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "fork_in_module",
+          "warning_filter": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/tmpu0uyizho/forker.py:4: DeprecationWarning: This process (pid=1234) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": false
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "interpreter default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        },
+        {
+          "case": "single_thread",
+          "warning_filter": "default",
+          "warned": false,
+          "warning": [],
+          "child": {
+            "child_threads": 1,
+            "child_acquired_lock": true
+          }
+        }
+      ],
+      "gunicorn_preload": [
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "unset",
+          "warned": false,
+          "warning": []
+        },
+        {
+          "preload_app": true,
+          "workers_booted": 2,
+          "PYTHONWARNINGS": "default",
+          "warned": true,
+          "warning": [
+            "/tmp/py3.14/lib/python3.14/site-packages/gunicorn/arbiter.py:734: DeprecationWarning: This process (pid=1246) is multi-threaded, use of fork() may lead to deadlocks in the child."
+          ]
+        }
+      ]
+    }
+  ]
+}

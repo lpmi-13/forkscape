@@ -146,6 +146,16 @@ button:focus-visible,input:focus-visible,label:focus-within,a:focus-visible,summ
 .step-slide{grid-area:1/1}
 .step-slide:not(.is-current){visibility:hidden}
 .step-event{margin:0;color:#c9c3dc;font:var(--text-sm)/1.5 'DM Mono',monospace}
+/* The stepper replays the problem or its fix, and its frame takes the run's colour: pink like the symptom, teal like the fix note. */
+.run-toggle{display:grid;grid-template-columns:1fr 1fr;margin:0 0 12px;border:2px solid #8a6caa;border-radius:4px;background:#2e3158;box-shadow:2px 2px 0 #151731;overflow:hidden}
+.run-toggle button{padding:6px 10px;border:0;background:transparent;color:#fce8d3;font-size:var(--text-md);font-weight:600}
+.run-toggle button+button{border-left:2px solid #8a6caa}
+.run-toggle button:hover:not(:disabled){transform:none;background:#684274;color:#fff7dc}
+.run-toggle button:focus-visible{outline-offset:-5px}
+.run-toggle [aria-pressed="true"],.run-toggle [aria-pressed="true"]:hover:not(:disabled){background:#e987a5;color:#2b1d3a;cursor:default}
+.run-toggle [data-run="fix"][aria-pressed="true"],.run-toggle [data-run="fix"][aria-pressed="true"]:hover:not(:disabled){background:#78dec6;color:#16303a}
+.stepper.is-fix{border-color:#78dec6}
+.fix-note{padding-left:12px;border-left:3px solid #78dec6}
 .chart{margin:16px 0 0;padding:12px 10px 8px;border:1px solid #4a4670;border-radius:6px;background:#1b1f3e}
 .chart-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0 0 6px;padding:0;list-style:none;color:#e5dfe8;font-size:var(--text-sm)}
 .chart-legend li{display:flex;align-items:center;gap:6px}
@@ -251,6 +261,8 @@ svg [data-motion]{transform-box:fill-box;transform-origin:0 0}
 #scenario-content{display:flex;flex-direction:column;min-height:100%;padding:0 16px}
 #scenario-content>*{flex-shrink:0}
 .lesson-rail:not(.sheet-expanded) #scenario-content>:not(.sheet-head,.stepper,.lab-dock){display:none}
+/* Collapsed, the dock keeps only the step; its top edge still shows the run in its colour. */
+.lesson-rail:not(.sheet-expanded) .run-toggle{display:none}
 .sheet-head{order:-1;position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:8px;margin:0 -16px;padding:16px 10px 8px 16px;border-bottom:2px solid #605579;background:#2b2a4c;cursor:pointer;touch-action:none}
 .sheet-head::before{content:'';position:absolute;top:6px;left:50%;width:2.5rem;height:4px;margin-left:-1.25rem;border-radius:2px;background:#8a6caa}
 .lesson-rail .sheet-head h1{flex:1;min-width:0;margin:0;font-size:var(--text-xl);line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -270,8 +282,9 @@ svg [data-motion]{transform-box:fill-box;transform-origin:0 0}
 .step-event{display:none}
 .stepper,.lab-dock{order:1;position:sticky;bottom:0;z-index:3;display:flex;flex-direction:column;margin:auto -16px 0;padding:12px 16px 14px;border:0;border-top:2px solid #e987a5;border-radius:0;background:#382c57;box-shadow:none}
 .step-slides{order:-1}
+.run-toggle{order:-2}
 .step-caption{margin:0 0 12px}
-.stepper-controls button{min-height:2.75rem}
+.stepper-controls button,.run-toggle button{min-height:2.75rem}
 .lab-dock .last-event{order:-1;margin:0}
 .lab-dock .last-event h2{display:none}
 .lab-dock .last-event p{min-height:4.5em;margin:0;color:#fff5de}
